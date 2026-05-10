@@ -27,6 +27,7 @@ const els = {
   rtcVideo: document.getElementById("rtcVideo"),
   rtcOverlay: document.getElementById("rtcOverlay"),
   rtcToggle: document.getElementById("rtcToggle"),
+  gizmoToggle: document.getElementById("gizmoToggle"),
   rtcStatus: document.getElementById("rtcStatus"),
   phoneOverlay: document.getElementById("phoneOverlay"),
   poStep: document.getElementById("po-step"),
@@ -143,6 +144,7 @@ function refreshButtons() {
   els.recenter.disabled = !ready;
   els.calibrate.disabled = !ready;
   els.rtcToggle.disabled = !ready;
+  els.gizmoToggle.disabled = !ready;
 }
 
 function updateLive(live) {
@@ -328,6 +330,13 @@ els.recenter.addEventListener("click", () => sendCommand({ type: "recenter" }));
 els.calibrate.addEventListener("click", () => sendCommand({ type: "calibrate" }));
 els.rtcToggle.addEventListener("click", () => {
   if (state.pc || state.rtcWanted) stopPreview(); else startPreview();
+});
+
+let gizmoOn = true;
+els.gizmoToggle.addEventListener("click", () => {
+  gizmoOn = !gizmoOn;
+  els.gizmoToggle.textContent = gizmoOn ? "Masquer le gizmo" : "Afficher le gizmo";
+  sendCommand({ type: "setGizmo", enabled: gizmoOn });
 });
 
 (async () => {

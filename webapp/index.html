@@ -10,6 +10,7 @@
     html, body { margin: 0; height: 100%; background: #0b0d10; color: #e7eaee; font-family: -apple-system, system-ui, sans-serif; overflow: hidden; }
     #stage { position: fixed; inset: 0; display: grid; place-items: center; }
     video { width: 100vw; height: 100vh; object-fit: cover; }
+    #gizmo { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; }
 
     /* Bandeau de statut en haut */
     #hud { position: fixed; top: env(safe-area-inset-top, 0); left: 0; right: 0; padding: 12px 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; background: linear-gradient(#0b0d10cc, transparent); z-index: 2; }
@@ -49,6 +50,7 @@
 
   <div id="stage">
     <video id="video" autoplay playsinline muted></video>
+    <canvas id="gizmo"></canvas>
   </div>
 
   <div id="hud">

@@ -2,6 +2,7 @@ import { FilesetResolver, FaceLandmarker } from "https://cdn.jsdelivr.net/npm/@m
 
 const els = {
   video: document.getElementById("video"),
+  gizmo: document.getElementById("gizmo"),
   ws: document.getElementById("ws"),
   cam: document.getElementById("cam"),
   model: document.getElementById("model"),
@@ -17,6 +18,16 @@ const els = {
   ovlNum: document.getElementById("ovl-num"),
   ovlRing: document.getElementById("ovl-ring"),
 };
+
+// Hidden canvas used as the WebRTC video source. We draw the camera frame
+// plus optional gizmo overlay into it, and capture its stream.
+const broadcastCanvas = document.createElement("canvas");
+broadcastCanvas.width = 480;
+broadcastCanvas.height = 360;
+const broadcastCtx = broadcastCanvas.getContext("2d");
+const gizmoCtx = els.gizmo.getContext("2d");
+let lastLandmarks = null;
+let lastMatrix = null;
 
 const CIRC = 2 * Math.PI * 46;
 const CAL_KEY = "tracksmfs.calibration.v2";
@@ -75,6 +86,7 @@ const state = {
   // camera stream + webrtc
   stream: null,
   pc: null,
+  gizmoEnabled: true,
 };
 
 const RTC_CONFIG = {
@@ -204,6 +216,9 @@ function handleCommand(msg) {
     case "rtc":
       handleRtcMessage(msg.payload);
       return;
+    case "setGizmo":
+      state.gizmoEnabled = !!msg.enabled;
+      return;
   }
 }
 
@@ -239,8 +254,10 @@ async function startWebRTC() {
   if (state.pc || !state.stream) return;
   const pc = new RTCPeerConnection(RTC_CONFIG);
   state.pc = pc;
-  // Add the camera track (preview only, not used by tracking).
-  for (const t of state.stream.getVideoTracks()) pc.addTrack(t, state.stream);
+  // Broadcast the canvas (camera + gizmo) instead of the raw camera track,
+  // so the PC preview shows the gizmo without any extra channel.
+  const broadcastStream = broadcastCanvas.captureStream(15);
+  for (const t of broadcastStream.getVideoTracks()) pc.addTrack(t, broadcastStream);
   pc.onicecandidate = (e) => { if (e.candidate) rtcSend({ kind: "ice", candidate: e.candidate }); };
   pc.onconnectionstatechange = () => {
     if (["failed", "disconnected", "closed"].includes(pc.connectionState)) stopWebRTC();
@@ -291,6 +308,8 @@ async function initModel() {
     outputFaceBlendshapes: false,
     outputFacialTransformationMatrixes: true,
   });
+  // FaceLandmarker also returns 2D normalized landmarks by default.
+  // We use them to draw the gizmo overlay.
   setPill(els.model, "modèle : prêt", "ok");
   state.modelReady = true;
 }
@@ -385,6 +404,91 @@ const filters = {
   z: new OneEuro({ minCutoff: 1.5, beta: 0.05 }),
 };
 function resetFilters() { for (const k of RAW_KEYS) { const f = filters[k]; f.x = null; f.dx = 0; f.t = null; } }
+
+// ----- Gizmo rendering ---------------------------------------------------
+
+// Project a model-space 3D point through the matrix and a simple
+// orthographic-with-bias camera, returning 2D pixel coordinates inside
+// the canvas of size (w, h). The point order in the returned array is
+// origin, X tip, Y tip, Z tip.
+function projectAxes(matrix, w, h) {
+  const TIP = 4; // unit length scaled to be visible
+  const points = [
+    [0, 0, 0],
+    [TIP, 0, 0],
+    [0, TIP, 0],
+    [0, 0, TIP],
+  ];
+  const tx = matrix[12], ty = matrix[13], tz = matrix[14];
+  // Use the average translation as anchor in screen space.
+  // Since the rear camera flips x and yaw, we mirror x for display.
+  const cx = w * 0.5;
+  const cy = h * 0.5;
+  // crude depth-aware scale: closer face = bigger axes
+  const depthScale = Math.max(0.5, Math.min(2.5, 30 / Math.max(8, Math.abs(tz) + 8)));
+  const projected = [];
+  for (const [px, py, pz] of points) {
+    const X = matrix[0] * px + matrix[4] * py + matrix[8]  * pz + tx;
+    const Y = matrix[1] * px + matrix[5] * py + matrix[9]  * pz + ty;
+    // We do not need Z for the 2D draw.
+    projected.push([cx + X * 6 * depthScale, cy - Y * 6 * depthScale]);
+  }
+  return projected;
+}
+
+function drawGizmo(ctx, sourceWidth, sourceHeight, targetWidth, targetHeight) {
+  if (!lastLandmarks) return;
+  const w = targetWidth, h = targetHeight;
+  // Mesh dots
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  for (const lm of lastLandmarks) {
+    const x = lm.x * w;
+    const y = lm.y * h;
+    ctx.fillRect(x - 0.5, y - 0.5, 1.5, 1.5);
+  }
+  // Axes from the facial transformation matrix
+  if (lastMatrix) {
+    const [o, xT, yT, zT] = projectAxes(lastMatrix, w, h);
+    ctx.lineWidth = 3;
+    ctx.lineCap = "round";
+    const drawAxis = (tip, color) => {
+      ctx.strokeStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(o[0], o[1]);
+      ctx.lineTo(tip[0], tip[1]);
+      ctx.stroke();
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(tip[0], tip[1], 4, 0, Math.PI * 2);
+      ctx.fill();
+    };
+    drawAxis(xT, "#ef4444"); // X red
+    drawAxis(yT, "#22c55e"); // Y green
+    drawAxis(zT, "#3b82f6"); // Z blue
+  }
+}
+
+// Render a frame to the broadcast canvas: video + (optional) gizmo.
+function renderBroadcastFrame() {
+  if (!els.video.videoWidth) return;
+  const w = broadcastCanvas.width, h = broadcastCanvas.height;
+  broadcastCtx.drawImage(els.video, 0, 0, w, h);
+  if (state.gizmoEnabled) {
+    drawGizmo(broadcastCtx, els.video.videoWidth, els.video.videoHeight, w, h);
+  }
+}
+
+// Render the on-phone gizmo overlay (matches the visible video element).
+function renderPhoneGizmo() {
+  const w = els.gizmo.clientWidth, h = els.gizmo.clientHeight;
+  if (els.gizmo.width !== w || els.gizmo.height !== h) {
+    els.gizmo.width = w; els.gizmo.height = h;
+  }
+  gizmoCtx.clearRect(0, 0, w, h);
+  if (state.gizmoEnabled) {
+    drawGizmo(gizmoCtx, els.video.videoWidth, els.video.videoHeight, w, h);
+  }
+}
 
 // Broadcast a status snapshot to the PC so it can mirror the overlay.
 let lastStatusAt = 0;
@@ -486,6 +590,10 @@ function loop() {
     maybeSendStatus(now);
     const result = state.landmarker.detectForVideo(els.video, now);
     const matrices = result.facialTransformationMatrixes;
+    lastLandmarks = result.faceLandmarks?.[0] ?? null;
+    lastMatrix = matrices?.[0]?.data ?? null;
+    renderBroadcastFrame();
+    renderPhoneGizmo();
     if (matrices && matrices.length > 0) {
       const raw = computePose(matrices[0].data);
       state.lastRaw = raw;
