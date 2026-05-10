@@ -36,12 +36,27 @@
   </section>
 
   <main>
+    <section class="preview">
+      <div class="preview-head">
+        <h2>Aperçu caméra du téléphone</h2>
+        <div class="preview-actions">
+          <button id="rtcToggle">Activer l'aperçu</button>
+          <span id="rtcStatus" class="muted">inactif</span>
+        </div>
+      </div>
+      <div class="preview-stage">
+        <video id="rtcVideo" autoplay playsinline muted></video>
+        <div id="rtcOverlay" class="preview-empty">Aperçu désactivé</div>
+      </div>
+    </section>
+
     <section class="axes">
       <div class="head">
         <div></div>
         <div>Activé</div>
         <div>Inverser</div>
         <div>Gain</div>
+        <div>Expo</div>
         <div>Offset</div>
         <div>Zone morte</div>
         <div>Entrée</div>
@@ -53,10 +68,11 @@
     <section class="hints">
       <h2>Conseils rapides</h2>
       <ul>
-        <li><b>Gain</b> : amplification. Mets <code>2.0</code> si tu veux que tourner la tête de 30° fasse pivoter la vue de 60°. Mets <code>0</code> pour neutraliser.</li>
-        <li><b>Inverser</b> : coche si la vue part dans le mauvais sens (souvent utile pour le yaw avec la caméra arrière).</li>
+        <li><b>Gain</b> : amplification. Mets <code>2.0</code> si tu veux que tourner la tête de 30° fasse pivoter la vue de 60°.</li>
+        <li><b>Expo</b> : courbe de réponse. <code>1.0</code> = linéaire. <code>1.5–2.0</code> = précis au centre, plus rapide en bord (idéal pour cockpit).</li>
+        <li><b>Inverser</b> : coche si la vue part dans le mauvais sens.</li>
         <li><b>Offset</b> : centre manuel. Permet de corriger une dérive sans relancer la calibration.</li>
-        <li><b>Zone morte</b> : ignore les petits mouvements en dessous de cette valeur. Utile contre les tremblements résiduels.</li>
+        <li><b>Zone morte</b> : ignore les petits mouvements en dessous de cette valeur.</li>
       </ul>
     </section>
   </main>

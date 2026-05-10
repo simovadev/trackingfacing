@@ -27,14 +27,14 @@ const TUNER_PORT = Number(process.env.TUNER_PORT ?? 7777);
 const AXES = ["yaw", "pitch", "roll", "x", "y", "z"];
 
 function defaultSettings() {
-  const tx = (gain) => ({ gain, offset: 0, deadzone: 0, invert: false, enabled: true });
+  const tx = (gain, expo = 1.5) => ({ gain, offset: 0, deadzone: 0, expo, invert: false, enabled: true });
   return {
-    yaw:   tx(1.0),
-    pitch: tx(1.0),
-    roll:  { gain: 0,   offset: 0, deadzone: 0, invert: false, enabled: false },
-    x:     tx(1.0),
-    y:     { gain: 0,   offset: 0, deadzone: 0, invert: false, enabled: false },
-    z:     tx(1.0),
+    yaw:   tx(1.0, 1.6),
+    pitch: tx(1.0, 1.5),
+    roll:  { gain: 0,   offset: 0, deadzone: 0, expo: 1.0, invert: false, enabled: false },
+    x:     tx(1.0, 1.3),
+    y:     { gain: 0,   offset: 0, deadzone: 0, expo: 1.0, invert: false, enabled: false },
+    z:     tx(1.0, 1.3),
   };
 }
 
@@ -69,12 +69,22 @@ let settings = loadSettings();
 const udp = dgram.createSocket("udp4");
 const buf = Buffer.allocUnsafe(48);
 
+// Apply per-axis response: deadzone -> exponential curve -> gain.
+// expo = 1 keeps the signal linear; expo > 1 dampens the center
+// (fine aiming) and amplifies the edges (fast head turns), the way
+// TrackIR/OpenTrack curves behave.
 function applyAxis(value, conf) {
   if (!conf.enabled) return 0;
-  let v = value + conf.offset;
+  let v = value + (conf.offset || 0);
   if (conf.invert) v = -v;
-  if (conf.deadzone > 0 && Math.abs(v) < conf.deadzone) return 0;
-  return v * conf.gain;
+  const dz = conf.deadzone || 0;
+  if (dz > 0) {
+    if (Math.abs(v) < dz) return 0;
+    v = v > 0 ? v - dz : v + dz;
+  }
+  const expo = conf.expo ?? 1;
+  if (expo !== 1) v = Math.sign(v) * Math.pow(Math.abs(v), expo);
+  return v * (conf.gain ?? 1);
 }
 
 function sendPose(rawPose) {
@@ -132,37 +142,80 @@ setInterval(() => {
 let ws;
 let backoffMs = 500;
 
+function decodeBinaryPose(buf) {
+  if (buf.length !== 25 || buf[0] !== 0x01) return null;
+  return {
+    yaw:   buf.readFloatLE(1),
+    pitch: buf.readFloatLE(5),
+    roll:  buf.readFloatLE(9),
+    x:     buf.readFloatLE(13),
+    y:     buf.readFloatLE(17),
+    z:     buf.readFloatLE(21),
+  };
+}
+
+let heartbeat = null;
+let lastPongAt = 0;
+
 function connectRelay() {
   ws = new WebSocket(RELAY_URL);
 
   ws.on("open", () => {
     backoffMs = 500;
     state.relayConnected = true;
+    lastPongAt = Date.now();
     console.log(`[connector] connected to relay ${RELAY_URL}`);
     console.log(`[connector] forwarding to OpenTrack ${OPENTRACK_HOST}:${OPENTRACK_PORT}`);
+    if (heartbeat) clearInterval(heartbeat);
+    heartbeat = setInterval(() => {
+      if (ws.readyState !== 1) return;
+      ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
+      if (Date.now() - lastPongAt > 15000) {
+        console.warn("[connector] no pong for 15s, forcing reconnect");
+        try { ws.close(); } catch {}
+      }
+    }, 5000);
   });
 
-  ws.on("message", (data) => {
+  ws.on("message", (data, isBinary) => {
+    if (isBinary || Buffer.isBuffer(data) && data[0] === 0x01) {
+      const pose = decodeBinaryPose(data);
+      if (pose) sendPose(pose);
+      return;
+    }
     try {
       const msg = JSON.parse(data);
-      if (msg && typeof msg === "object" && typeof msg.type === "string") {
-        if (msg.type === "senderState") {
-          state.phoneConnected = !!msg.connected;
-          if (!state.phoneConnected) {
-            // Wipe last values so the UI does not show stale numbers.
-            state.lastIn = null;
-            state.lastOut = null;
-          }
+      if (!msg || typeof msg !== "object") return;
+      if (msg.type === "pong") { lastPongAt = Date.now(); return; }
+      if (msg.type === "ping") { ws.send(JSON.stringify({ type: "pong", t: msg.t })); return; }
+      if (msg.type === "senderState") {
+        state.phoneConnected = !!msg.connected;
+        if (!state.phoneConnected) {
+          state.lastIn = null;
+          state.lastOut = null;
+          // Drop any pending camera preview when the phone goes away.
+          broadcastTuner({ type: "rtc", payload: { kind: "phoneGone" } });
         }
         return;
       }
-      if (msg && typeof msg.yaw === "number") sendPose(msg);
+      if (msg.type === "rtc") {
+        // RTC signaling from the phone -> forward to whichever tuner UI is connected.
+        broadcastTuner({ type: "rtc", payload: msg.payload });
+        return;
+      }
+      if (msg.type === "calibrationDone") {
+        broadcastTuner({ type: "calibrationDone" });
+        return;
+      }
+      // Legacy JSON pose (kept as a fallback).
+      if (typeof msg.yaw === "number") sendPose(msg);
     } catch {}
   });
 
   ws.on("close", () => {
     state.relayConnected = false;
     state.phoneConnected = false;
+    if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
     console.log(`[connector] relay closed, retrying in ${backoffMs}ms`);
     setTimeout(connectRelay, backoffMs);
     backoffMs = Math.min(backoffMs * 2, 10_000);
@@ -248,9 +301,30 @@ const tuner = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server: tuner, path: "/ws" });
 wss.on("connection", (client) => {
   tunerClients.add(client);
+  client.isAlive = true;
+  client.on("pong", () => { client.isAlive = true; });
   client.send(JSON.stringify({ type: "settings", settings }));
+  client.on("message", (data) => {
+    try {
+      const msg = JSON.parse(data);
+      if (!msg || typeof msg !== "object") return;
+      // Forward RTC signaling from tuner UI -> phone, via the relay link.
+      if (msg.type === "rtc" && ws?.readyState === 1) {
+        ws.send(JSON.stringify(msg));
+      }
+    } catch {}
+  });
   client.on("close", () => tunerClients.delete(client));
 });
+
+// Drop dead tuner clients (browser tab closed, network gone, etc).
+setInterval(() => {
+  for (const c of tunerClients) {
+    if (!c.isAlive) { try { c.terminate(); } catch {} continue; }
+    c.isAlive = false;
+    try { c.ping(); } catch {}
+  }
+}, 10_000);
 
 tuner.listen(TUNER_PORT, "127.0.0.1", () => {
   console.log(`[connector] tuner UI on http://localhost:${TUNER_PORT}`);

@@ -72,6 +72,13 @@ const state = {
   calPeak: 0,
   // countdown
   countdownEndAt: 0,
+  // camera stream + webrtc
+  stream: null,
+  pc: null,
+};
+
+const RTC_CONFIG = {
+  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
 };
 
 function setPill(el, text, cls) {
@@ -108,14 +115,33 @@ function setStatePill() {
 function connectWS() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/sender`);
-  ws.addEventListener("open", () => setPill(els.ws, "ws : connecté", "ok"));
+  let heartbeat = null;
+  let lastPongAt = performance.now();
+
+  ws.addEventListener("open", () => {
+    setPill(els.ws, "ws : connecté", "ok");
+    lastPongAt = performance.now();
+    heartbeat = setInterval(() => {
+      if (ws.readyState !== 1) return;
+      ws.send(JSON.stringify({ type: "ping", t: performance.now() }));
+      // Detect zombie connection: no pong in 15 s -> force close to retry.
+      if (performance.now() - lastPongAt > 15000) {
+        try { ws.close(); } catch {}
+      }
+    }, 5000);
+  });
   ws.addEventListener("message", (ev) => {
+    if (typeof ev.data !== "string") return;
     try {
       const msg = JSON.parse(ev.data);
-      if (msg && typeof msg === "object" && msg.type) handleCommand(msg);
+      if (!msg || typeof msg !== "object") return;
+      if (msg.type === "pong") { lastPongAt = performance.now(); return; }
+      if (msg.type === "ping") { ws.send(JSON.stringify({ type: "pong", t: msg.t })); return; }
+      if (msg.type) handleCommand(msg);
     } catch {}
   });
   ws.addEventListener("close", () => {
+    if (heartbeat) clearInterval(heartbeat);
     setPill(els.ws, "ws : déconnecté", "bad");
     setTimeout(connectWS, 1000);
   });
@@ -125,6 +151,22 @@ function connectWS() {
 
 function send(obj) {
   if (state.ws?.readyState === 1) state.ws.send(JSON.stringify(obj));
+}
+
+// Binary pose payload: 1 byte tag (0x01) + 6 little-endian float32.
+// Total 25 bytes vs ~120 in JSON.
+const POSE_BUF = new ArrayBuffer(25);
+const POSE_VIEW = new DataView(POSE_BUF);
+POSE_VIEW.setUint8(0, 0x01);
+function sendPose(p) {
+  if (state.ws?.readyState !== 1) return;
+  POSE_VIEW.setFloat32(1,  p.yaw,   true);
+  POSE_VIEW.setFloat32(5,  p.pitch, true);
+  POSE_VIEW.setFloat32(9,  p.roll,  true);
+  POSE_VIEW.setFloat32(13, p.x,     true);
+  POSE_VIEW.setFloat32(17, p.y,     true);
+  POSE_VIEW.setFloat32(21, p.z,     true);
+  state.ws.send(POSE_BUF);
 }
 
 function handleCommand(msg) {
@@ -159,6 +201,9 @@ function handleCommand(msg) {
     case "calibrate":
       runCalibration();
       return;
+    case "rtc":
+      handleRtcMessage(msg.payload);
+      return;
   }
 }
 
@@ -173,6 +218,7 @@ async function initCamera() {
       width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 60 },
     },
   });
+  state.stream = stream;
   els.video.srcObject = stream;
   await new Promise((res) => {
     if (els.video.readyState >= 2) return res();
@@ -181,6 +227,53 @@ async function initCamera() {
   await els.video.play();
   setPill(els.cam, `caméra : arrière ${els.video.videoWidth}×${els.video.videoHeight}`, "ok");
   state.cameraReady = true;
+}
+
+// ----- WebRTC sender (camera preview to PC) -----------------------------
+
+function rtcSend(payload) {
+  send({ type: "rtc", payload });
+}
+
+async function startWebRTC() {
+  if (state.pc || !state.stream) return;
+  const pc = new RTCPeerConnection(RTC_CONFIG);
+  state.pc = pc;
+  // Add the camera track (preview only, not used by tracking).
+  for (const t of state.stream.getVideoTracks()) pc.addTrack(t, state.stream);
+  pc.onicecandidate = (e) => { if (e.candidate) rtcSend({ kind: "ice", candidate: e.candidate }); };
+  pc.onconnectionstatechange = () => {
+    if (["failed", "disconnected", "closed"].includes(pc.connectionState)) stopWebRTC();
+  };
+  const offer = await pc.createOffer({ offerToReceiveVideo: false });
+  // Cap bitrate to ~250 kbps so the preview stays cheap on Shadow's uplink.
+  offer.sdp = offer.sdp.replace(/a=mid:0\r\n/, "a=mid:0\r\nb=AS:250\r\n");
+  await pc.setLocalDescription(offer);
+  rtcSend({ kind: "offer", sdp: pc.localDescription });
+}
+
+async function handleRtcMessage(payload) {
+  if (!payload || typeof payload !== "object") return;
+  if (payload.kind === "request") {
+    await startWebRTC();
+    return;
+  }
+  if (payload.kind === "stop") {
+    stopWebRTC();
+    return;
+  }
+  if (!state.pc) return;
+  if (payload.kind === "answer") {
+    await state.pc.setRemoteDescription(payload.sdp);
+    return;
+  }
+  if (payload.kind === "ice" && payload.candidate) {
+    try { await state.pc.addIceCandidate(payload.candidate); } catch {}
+  }
+}
+
+function stopWebRTC() {
+  if (state.pc) { try { state.pc.close(); } catch {} state.pc = null; }
 }
 
 async function initModel() {
@@ -417,7 +510,7 @@ function loop() {
             y: filters.y.filter(out.y, t),
             z: filters.z.filter(out.z, t),
           };
-          send(filtered);
+          sendPose(filtered);
         }
       }
     }
