@@ -81,17 +81,17 @@ function connectWS() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const url = `${proto}://${location.host}/sender`;
   const ws = new WebSocket(url);
-  ws.addEventListener("open", () => setPill(els.ws, "ws: open", "ok"));
+  ws.addEventListener("open", () => setPill(els.ws, "ws : connecté", "ok"));
   ws.addEventListener("close", () => {
-    setPill(els.ws, "ws: closed", "bad");
+    setPill(els.ws, "ws : déconnecté", "bad");
     setTimeout(connectWS, 1000);
   });
-  ws.addEventListener("error", () => setPill(els.ws, "ws: error", "bad"));
+  ws.addEventListener("error", () => setPill(els.ws, "ws : erreur", "bad"));
   state.ws = ws;
 }
 
 async function initCamera() {
-  setPill(els.cam, "cam: requesting");
+  setPill(els.cam, "caméra : demande…");
   const prev = els.video.srcObject;
   if (prev) prev.getTracks().forEach((t) => t.stop());
   const stream = await navigator.mediaDevices.getUserMedia({
@@ -99,14 +99,14 @@ async function initCamera() {
     video: { facingMode: state.facingMode, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 60 } },
   });
   els.video.srcObject = stream;
-  // Mirror only the front camera to keep movement intuitive.
+  // Miroir uniquement pour la caméra avant pour que les mouvements soient intuitifs.
   els.video.style.transform = state.facingMode === "user" ? "scaleX(-1)" : "scaleX(1)";
   await new Promise((res) => {
     if (els.video.readyState >= 2) return res();
     els.video.addEventListener("loadeddata", res, { once: true });
   });
   await els.video.play();
-  setPill(els.cam, `cam: ${state.facingMode === "user" ? "front" : "rear"} ${els.video.videoWidth}x${els.video.videoHeight}`, "ok");
+  setPill(els.cam, `caméra : ${state.facingMode === "user" ? "avant" : "arrière"} ${els.video.videoWidth}×${els.video.videoHeight}`, "ok");
 }
 
 function resetFilters() {
@@ -122,13 +122,13 @@ function suppressFor(ms) {
 }
 
 async function acquireWakeLock() {
-  if (!("wakeLock" in navigator)) { setPill(els.wake, "wake: n/a"); return; }
+  if (!("wakeLock" in navigator)) { setPill(els.wake, "veille : indispo"); return; }
   try {
     state.wakeLock = await navigator.wakeLock.request("screen");
-    setPill(els.wake, "wake: on", "ok");
-    state.wakeLock.addEventListener("release", () => setPill(els.wake, "wake: off"));
+    setPill(els.wake, "veille : empêchée", "ok");
+    state.wakeLock.addEventListener("release", () => setPill(els.wake, "veille : off"));
   } catch (e) {
-    setPill(els.wake, "wake: denied", "bad");
+    setPill(els.wake, "veille : refusée", "bad");
   }
 }
 
@@ -139,7 +139,7 @@ document.addEventListener("visibilitychange", async () => {
 });
 
 async function initModel() {
-  setPill(els.model, "model: loading");
+  setPill(els.model, "modèle : chargement…");
   const fileset = await FilesetResolver.forVisionTasks(
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm"
   );
@@ -153,18 +153,38 @@ async function initModel() {
     outputFaceBlendshapes: false,
     outputFacialTransformationMatrixes: true,
   });
-  setPill(els.model, "model: ready", "ok");
+  setPill(els.model, "modèle : prêt", "ok");
 }
 
-// Extract Tait-Bryan angles (yaw, pitch, roll) from a column-major 4x4 transform.
-// Convention: yaw = rotation around Y, pitch = around X, roll = around Z.
+// Extract Tait-Bryan angles (yaw, pitch, roll) from MediaPipe's
+// column-major 4x4 facial transformation matrix.
+//
+// Layout (column-major, MediaPipe convention):
+//     | m0  m4  m8  m12 |   (column 0,  column 1,  column 2,  translation)
+//     | m1  m5  m9  m13 |
+//     | m2  m6  m10 m14 |
+//     | m3  m7  m11 m15 |
+// so element R[row][col] = m[col*4 + row].
+//
+// Decomposition order is YXZ (yaw around Y, then pitch around X, then
+// roll around Z) which matches the convention OpenTrack expects on its
+// freetrack/TrackIR output.
 function eulerFromMatrix(m) {
-  const r00 = m[0], r10 = m[1], r20 = m[2];
-  const r21 = m[6];
-  const r22 = m[10];
-  const pitch = Math.atan2(-r20, Math.hypot(r21, r22));
-  const yaw = Math.atan2(r10, r00);
-  const roll = Math.atan2(r21, r22);
+  const r00 = m[0],  r10 = m[1],  r20 = m[2];
+  const r01 = m[4],  r11 = m[5],  r21 = m[6];
+  const r02 = m[8],  r12 = m[9],  r22 = m[10];
+
+  // YXZ decomposition.
+  const pitch = Math.asin(Math.max(-1, Math.min(1, -r12)));
+  let yaw, roll;
+  if (Math.abs(r12) < 0.9999) {
+    yaw  = Math.atan2(r02, r22);
+    roll = Math.atan2(r10, r11);
+  } else {
+    // Gimbal lock fallback.
+    yaw  = Math.atan2(-r20, r00);
+    roll = 0;
+  }
   return { yaw, pitch, roll };
 }
 
@@ -289,7 +309,7 @@ async function loop() {
   }
   state.frames++;
   if (now - state.fpsAt > 1000) {
-    setPill(els.model, `model: ${state.frames} fps`, "ok");
+    setPill(els.model, `modèle : ${state.frames} ips`, "ok");
     state.frames = 0; state.fpsAt = now;
   }
   requestAnimationFrame(loop);
@@ -305,7 +325,7 @@ els.start.addEventListener("click", async () => {
     state.running = true;
     requestAnimationFrame(loop);
   } catch (e) {
-    setPill(els.cam, "cam: error", "bad");
+    setPill(els.cam, "caméra : erreur", "bad");
     console.error(e);
     els.start.disabled = false;
   }
@@ -330,10 +350,10 @@ els.pauseResume.addEventListener("click", () => {
       saveCalibration(state.calibration);
     }
     els.pauseResume.textContent = "Pause";
-    setPill(els.cam, `cam: ${state.facingMode === "user" ? "front" : "rear"} ${els.video.videoWidth}x${els.video.videoHeight}`, "ok");
+    setPill(els.cam, `caméra : ${state.facingMode === "user" ? "avant" : "arrière"} ${els.video.videoWidth}×${els.video.videoHeight}`, "ok");
   } else {
     state.paused = true;
-    els.pauseResume.textContent = "Resume";
+    els.pauseResume.textContent = "Reprendre";
   }
 });
 
@@ -342,8 +362,7 @@ els.flip.addEventListener("click", async () => {
   els.flip.disabled = true;
   const previous = state.facingMode;
   state.facingMode = previous === "user" ? "environment" : "user";
-  // Stop sending until the new stream is settled and the user has had
-  // time to reposition the phone.
+  // On suspend l'envoi tant que l'utilisateur n'a pas repositionné le téléphone.
   suppressFor(60_000);
   resetFilters();
   if (state.running) {
@@ -353,32 +372,31 @@ els.flip.addEventListener("click", async () => {
       await initCamera();
     }
   }
-  // Drop the suppression window early once Resume / Re-center is pressed.
-  setPill(els.cam, `cam: position phone, then Resume`, "ok");
+  setPill(els.cam, "caméra : place le téléphone, puis Reprendre", "ok");
   state.paused = true;
-  els.pauseResume.textContent = "Resume";
+  els.pauseResume.textContent = "Reprendre";
   els.flip.disabled = false;
 });
 
 // ----- Calibration wizard -----------------------------------------------
 
 const STEPS = [
-  { axis: null,    sign: 0,  arrow: "·",  title: "Look straight ahead",        sub: "Stay centered and still.",                  duration: 3000 },
-  { axis: "yaw",   sign: -1, arrow: "←",  title: "Turn head fully left",       sub: "Eyes follow. Don't move shoulders.",         duration: 5000 },
-  { axis: "yaw",   sign: +1, arrow: "→",  title: "Turn head fully right",      sub: "Eyes follow. Don't move shoulders.",         duration: 5000 },
-  { axis: "pitch", sign: +1, arrow: "↑",  title: "Look up",                    sub: "Tilt your head up as far as comfortable.",   duration: 5000 },
-  { axis: "pitch", sign: -1, arrow: "↓",  title: "Look down",                  sub: "Tilt your head down as far as comfortable.", duration: 5000 },
-  { axis: "x",     sign: -1, arrow: "↤",  title: "Lean head to the left",      sub: "Translate (slide) head left, not tilt.",     duration: 5000 },
-  { axis: "x",     sign: +1, arrow: "↦",  title: "Lean head to the right",     sub: "Translate (slide) head right, not tilt.",    duration: 5000 },
-  { axis: "z",     sign: +1, arrow: "⊕",  title: "Move head closer",           sub: "Lean toward the camera.",                    duration: 5000 },
-  { axis: "z",     sign: -1, arrow: "⊖",  title: "Move head back",             sub: "Lean away from the camera.",                 duration: 5000 },
+  { axis: null,    sign: 0,  arrow: "·",  title: "Regarde droit devant",          sub: "Reste bien centré et immobile.",                    duration: 3000 },
+  { axis: "yaw",   sign: -1, arrow: "←",  title: "Tourne la tête à fond à gauche", sub: "Sans bouger les épaules.",                          duration: 5000 },
+  { axis: "yaw",   sign: +1, arrow: "→",  title: "Tourne la tête à fond à droite", sub: "Sans bouger les épaules.",                          duration: 5000 },
+  { axis: "pitch", sign: +1, arrow: "↑",  title: "Regarde en haut",                sub: "Lève la tête au maximum confortable.",              duration: 5000 },
+  { axis: "pitch", sign: -1, arrow: "↓",  title: "Regarde en bas",                 sub: "Baisse la tête au maximum confortable.",            duration: 5000 },
+  { axis: "x",     sign: -1, arrow: "↤",  title: "Penche la tête à gauche",        sub: "Glisse la tête latéralement, ne penche pas.",       duration: 5000 },
+  { axis: "x",     sign: +1, arrow: "↦",  title: "Penche la tête à droite",        sub: "Glisse la tête latéralement, ne penche pas.",       duration: 5000 },
+  { axis: "z",     sign: +1, arrow: "⊕",  title: "Approche la tête",               sub: "Avance vers la caméra (lecture instrument).",       duration: 5000 },
+  { axis: "z",     sign: -1, arrow: "⊖",  title: "Recule la tête",                 sub: "Recule par rapport à la caméra.",                   duration: 5000 },
 ];
 
 const CIRCUMFERENCE = 2 * Math.PI * 46;
 
 function showCalUI(step, idx) {
   els.cal.classList.add("show");
-  els.calStep.textContent = `Step ${idx + 1} / ${STEPS.length}`;
+  els.calStep.textContent = `Étape ${idx + 1} / ${STEPS.length}`;
   els.calArrow.textContent = step.arrow;
   els.calTitle.textContent = step.title;
   els.calSub.textContent = step.sub;
@@ -455,7 +473,7 @@ async function runCalibrationStep(step, idx) {
 async function runCalibration() {
   if (state.calRunning) return;
   if (!state.running) {
-    alert("Press Start first to enable the camera.");
+    alert("Appuie d'abord sur Démarrer pour activer la caméra.");
     return;
   }
   state.calRunning = true;
