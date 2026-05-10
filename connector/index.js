@@ -31,9 +31,9 @@ function defaultSettings() {
   return {
     yaw:   tx(1.0, 1.6),
     pitch: tx(1.0, 1.5),
-    roll:  { gain: 0,   offset: 0, deadzone: 0, expo: 1.0, invert: false, enabled: false },
+    roll:  tx(1.0, 1.2),
     x:     tx(1.0, 1.3),
-    y:     { gain: 0,   offset: 0, deadzone: 0, expo: 1.0, invert: false, enabled: false },
+    y:     tx(1.0, 1.3),
     z:     tx(1.0, 1.3),
   };
 }
