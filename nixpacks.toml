@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ["nodejs_22"]
+
+[phases.install]
+cmds = ["cd relay && npm ci"]
+
+[start]
+cmd = "cd relay && node index.js"
