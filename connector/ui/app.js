@@ -449,11 +449,13 @@ function connectWS() {
           if (g && Number.isFinite(g.x) && Number.isFinite(g.y)) {
             els.gazeLive.textContent = `x=${g.x.toFixed(2)}  y=${g.y.toFixed(2)}  (raw x=${gr?.x?.toFixed?.(2) ?? "?"}  y=${gr?.y?.toFixed?.(2) ?? "?"})`;
           }
-          if (gazeCal.running && gr && Number.isFinite(gr.x) && Number.isFinite(gr.y)) {
-            const step = GAZE_STEPS[gazeCal.idx];
-            // Drop the first 700 ms of each corner to let the eyes settle.
-            if (performance.now() - gazeCal.startedAt > 700) {
-              gazeCal.samples[step.axis].push(gr);
+          if (gazeCal.running && gr && Number.isFinite(gr.x) && Number.isFinite(gr.y) &&
+              Number.isFinite(gr.yaw) && Number.isFinite(gr.pitch)) {
+            // Skip the first GAZE_SETTLE_MS of each point so the eyes
+            // can move to it before we sample. Index 0..15 = the dot
+            // currently active in the 4x4 grid.
+            if (performance.now() - gazeCal.startedAt > GAZE_SETTLE_MS) {
+              gazeCal.samples[gazeCal.idx].push(gr);
             }
           }
         }
@@ -542,15 +544,43 @@ els.debugRecord.addEventListener("click", () => {
 
 // ----- Gaze (eye tracking) ---------------------------------------------
 
-const GAZE_STEPS = [
-  { axis: "c",  title: "Regarde au CENTRE",       sub: "Garde la tête immobile. Suis avec les yeux uniquement." },
-  { axis: "tl", title: "Regarde en HAUT-GAUCHE",  sub: "Tourne juste les yeux vers le coin." },
-  { axis: "tr", title: "Regarde en HAUT-DROITE",  sub: "Tourne juste les yeux vers le coin." },
-  { axis: "br", title: "Regarde en BAS-DROITE",   sub: "Tourne juste les yeux vers le coin." },
-  { axis: "bl", title: "Regarde en BAS-GAUCHE",   sub: "Tourne juste les yeux vers le coin." },
-];
-const GAZE_STEP_MS = 2500;
-const gazeCal = { running: false, idx: 0, startedAt: 0, samples: null };
+// 16-point grid (4 columns x 4 rows) covering the screen. Targets are
+// expressed in [-1, +1] (-1 = left/top, +1 = right/bottom), the same
+// space as the final gaze output the phone emits.
+const GAZE_GRID = (() => {
+  const pts = [];
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      pts.push({
+        // Map column/row index 0..3 to [-1, +1]: (i/3)*2 - 1
+        targetX: (c / 3) * 2 - 1,
+        targetY: (r / 3) * 2 - 1,
+        // For CSS positioning inside .gaze-cal-grid (which has 40 px
+        // inset on all sides): a percentage from 0 % to 100 %.
+        cssX: (c / 3) * 100,
+        cssY: (r / 3) * 100,
+      });
+    }
+  }
+  return pts;
+})();
+const GAZE_STEP_MS = 2000;
+const GAZE_SETTLE_MS = 600;   // discard the first 600 ms of each point
+const gazeCal = { running: false, idx: 0, startedAt: 0, samples: null, dotEls: [] };
+
+function buildGazeCalGrid() {
+  const grid = document.getElementById("gazeCalGrid");
+  grid.innerHTML = "";
+  gazeCal.dotEls = GAZE_GRID.map((p, i) => {
+    const d = document.createElement("div");
+    d.className = "gaze-cal-dot";
+    d.style.left = p.cssX + "%";
+    d.style.top  = p.cssY + "%";
+    d.dataset.idx = String(i);
+    grid.appendChild(d);
+    return d;
+  });
+}
 
 function syncGazeUI() {
   const g = state.settings?.gaze;
@@ -592,13 +622,12 @@ els.gazeReset.addEventListener("click", () => {
   sendCommand({ type: "resetGazeCalibration" });
 });
 
-function highlightGazeDot(axis) {
-  const overlay = els.gazeCalOverlay;
-  overlay.querySelectorAll(".gaze-cal-dot").forEach((d) => d.classList.remove("active"));
-  if (axis) {
-    const sel = overlay.querySelector(".gaze-cal-dot." + axis);
-    if (sel) sel.classList.add("active");
-    overlay.classList.toggle("active-c", axis === "c");
+function highlightGazeDot(idx) {
+  for (let i = 0; i < gazeCal.dotEls.length; i++) {
+    const d = gazeCal.dotEls[i];
+    d.classList.remove("active");
+    if (i === idx) d.classList.add("active");
+    else if (idx != null && i < idx) d.classList.add("done");
   }
 }
 
@@ -608,36 +637,37 @@ function startGazeCalibration() {
     alert("Le téléphone doit être connecté pour calibrer le regard.");
     return;
   }
+  buildGazeCalGrid();
   gazeCal.running = true;
   gazeCal.idx = 0;
   gazeCal.startedAt = performance.now();
-  gazeCal.samples = { c: [], tl: [], tr: [], br: [], bl: [] };
+  gazeCal.samples = GAZE_GRID.map(() => []);
   els.gazeCalOverlay.classList.remove("hidden");
-  const step = GAZE_STEPS[0];
-  els.gazeCalTitle.textContent = step.title;
-  els.gazeCalSub.textContent = step.sub;
-  els.gazeCalNum.textContent = Math.ceil(GAZE_STEP_MS / 1000);
-  highlightGazeDot(step.axis);
+  refreshGazeCalUI();
   requestAnimationFrame(gazeCalibrationLoop);
+}
+
+function refreshGazeCalUI() {
+  els.gazeCalStep.textContent = `Calibration regard — point ${gazeCal.idx + 1} / ${GAZE_GRID.length}`;
+  els.gazeCalTitle.textContent = "Regarde le point bleu qui s'allume";
+  els.gazeCalSub.textContent = "Garde la tête immobile. Suis uniquement avec les yeux.";
+  els.gazeCalNum.textContent = Math.ceil(GAZE_STEP_MS / 1000);
+  highlightGazeDot(gazeCal.idx);
 }
 
 function gazeCalibrationLoop() {
   if (!gazeCal.running) return;
   const now = performance.now();
   const elapsed = now - gazeCal.startedAt;
-  const step = GAZE_STEPS[gazeCal.idx];
   els.gazeCalNum.textContent = Math.max(0, Math.ceil((GAZE_STEP_MS - elapsed) / 1000));
   if (elapsed >= GAZE_STEP_MS) {
-    if (gazeCal.idx + 1 >= GAZE_STEPS.length) {
+    if (gazeCal.idx + 1 >= GAZE_GRID.length) {
       finalizeGazeCalibration();
       return;
     }
     gazeCal.idx++;
     gazeCal.startedAt = now;
-    const next = GAZE_STEPS[gazeCal.idx];
-    els.gazeCalTitle.textContent = next.title;
-    els.gazeCalSub.textContent = next.sub;
-    highlightGazeDot(next.axis);
+    refreshGazeCalUI();
   }
   requestAnimationFrame(gazeCalibrationLoop);
 }
@@ -645,33 +675,113 @@ function gazeCalibrationLoop() {
 function gazeCalibrationCancel() {
   gazeCal.running = false;
   els.gazeCalOverlay.classList.add("hidden");
-  highlightGazeDot(null);
+}
+
+// ----- Polynomial fit (least squares, normal equations) ---------------
+
+function gazeFeatures(gx, gy, yaw, pitch) {
+  return [
+    1, gx, gy, yaw, pitch,
+    gx * gy, gx * yaw, gx * pitch, gy * yaw, gy * pitch,
+    yaw * pitch, gx * gx, gy * gy, yaw * yaw, pitch * pitch,
+  ];
+}
+
+// Solve (X^T X) θ = X^T y for θ using Gauss elimination with partial
+// pivoting. X is an n×p matrix and y a length-n vector. Returns the
+// p-vector θ, or null if the system is singular.
+function leastSquares(X, y) {
+  const n = X.length, p = X[0].length;
+  // Build A = X^T X (p×p) and b = X^T y (p)
+  const A = Array.from({ length: p }, () => new Array(p).fill(0));
+  const b = new Array(p).fill(0);
+  for (let i = 0; i < n; i++) {
+    const xi = X[i], yi = y[i];
+    for (let j = 0; j < p; j++) {
+      b[j] += xi[j] * yi;
+      const aj = A[j];
+      for (let k = 0; k < p; k++) aj[k] += xi[j] * xi[k];
+    }
+  }
+  // Add a tiny Tikhonov regularization on the diagonal to keep things
+  // well-conditioned even when some features are nearly collinear.
+  for (let i = 0; i < p; i++) A[i][i] += 1e-6;
+  // Gauss elimination with partial pivoting on [A | b].
+  for (let i = 0; i < p; i++) {
+    let pivot = i;
+    let maxAbs = Math.abs(A[i][i]);
+    for (let r = i + 1; r < p; r++) {
+      if (Math.abs(A[r][i]) > maxAbs) { maxAbs = Math.abs(A[r][i]); pivot = r; }
+    }
+    if (maxAbs < 1e-12) return null;
+    if (pivot !== i) { [A[i], A[pivot]] = [A[pivot], A[i]]; [b[i], b[pivot]] = [b[pivot], b[i]]; }
+    for (let r = i + 1; r < p; r++) {
+      const factor = A[r][i] / A[i][i];
+      for (let c = i; c < p; c++) A[r][c] -= factor * A[i][c];
+      b[r] -= factor * b[i];
+    }
+  }
+  // Back substitution.
+  const theta = new Array(p).fill(0);
+  for (let i = p - 1; i >= 0; i--) {
+    let s = b[i];
+    for (let j = i + 1; j < p; j++) s -= A[i][j] * theta[j];
+    theta[i] = s / A[i][i];
+  }
+  return theta;
 }
 
 function finalizeGazeCalibration() {
-  const s = gazeCal.samples;
   gazeCal.running = false;
   els.gazeCalOverlay.classList.add("hidden");
-  highlightGazeDot(null);
-  // For each corner, compute the median of the raw gaze samples (more
-  // robust than the mean to a few blinks or stray frames). Then derive
-  // the range as the extreme of the four corners.
-  const med = (arr, k) => {
+  // Build the design matrix and the two target vectors. For each
+  // calibration point we use the median sample (robust to blinks).
+  const median = (arr, k) => {
     const v = arr.map((p) => p[k]).filter(Number.isFinite).sort((a, b) => a - b);
-    return v.length ? v[v.length >> 1] : 0;
+    return v.length ? v[v.length >> 1] : NaN;
   };
-  const xs = [med(s.tl, "x"), med(s.tr, "x"), med(s.br, "x"), med(s.bl, "x")];
-  const ys = [med(s.tl, "y"), med(s.tr, "y"), med(s.br, "y"), med(s.bl, "y")];
-  const calibration = {
-    x: { min: Math.min(...xs), max: Math.max(...xs) },
-    y: { min: Math.min(...ys), max: Math.max(...ys) },
-  };
-  if (!isFinite(calibration.x.min) || !isFinite(calibration.x.max) ||
-      calibration.x.min >= calibration.x.max || calibration.y.min >= calibration.y.max) {
-    alert("Calibration regard impossible : pas assez de données valides. Réessaie.");
+  const X = [], targetXs = [], targetYs = [];
+  let usable = 0;
+  for (let i = 0; i < GAZE_GRID.length; i++) {
+    const samples = gazeCal.samples[i];
+    if (!samples || samples.length < 3) continue;
+    const gx = median(samples, "x");
+    const gy = median(samples, "y");
+    const yaw = median(samples, "yaw");
+    const pitch = median(samples, "pitch");
+    if (!Number.isFinite(gx) || !Number.isFinite(gy) ||
+        !Number.isFinite(yaw) || !Number.isFinite(pitch)) continue;
+    X.push(gazeFeatures(gx, gy, yaw, pitch));
+    targetXs.push(GAZE_GRID[i].targetX);
+    targetYs.push(GAZE_GRID[i].targetY);
+    usable++;
+  }
+  if (usable < 12) {
+    alert(`Calibration regard impossible : seulement ${usable} points exploitables sur ${GAZE_GRID.length}. Réessaie en gardant les yeux sur chaque point.`);
     return;
   }
-  sendCommand({ type: "setGazeCalibration", calibration });
+  const coefX = leastSquares(X, targetXs);
+  const coefY = leastSquares(X, targetYs);
+  if (!coefX || !coefY) {
+    alert("Calibration regard impossible : système numériquement singulier. Réessaie en bougeant un peu plus les yeux.");
+    return;
+  }
+  // Quick residual sanity check: average error on the calibration
+  // points themselves, in screen pixels (rough estimate).
+  let rssX = 0, rssY = 0;
+  for (let i = 0; i < X.length; i++) {
+    let px = 0, py = 0;
+    for (let j = 0; j < 15; j++) { px += coefX[j] * X[i][j]; py += coefY[j] * X[i][j]; }
+    rssX += (px - targetXs[i]) ** 2;
+    rssY += (py - targetYs[i]) ** 2;
+  }
+  const rmsX = Math.sqrt(rssX / X.length);
+  const rmsY = Math.sqrt(rssY / X.length);
+  console.log(`[gaze cal] ${usable} points, RMS error: x=${rmsX.toFixed(3)} y=${rmsY.toFixed(3)} (in [-1,+1] space)`);
+  sendCommand({
+    type: "setGazeCalibration",
+    calibration: { kind: "poly2", coefX, coefY },
+  });
 }
 
 els.gazeCalibrate.addEventListener("click", startGazeCalibration);

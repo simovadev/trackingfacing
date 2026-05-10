@@ -134,30 +134,21 @@ section h2 { margin: 0 0 8px; font-size: 14px; font-weight: 700; opacity: 0.85; 
 .gaze .gaze-live #gazeLive { color: #93c5fd; margin-left: 8px; }
 .gaze .small { font-size: 12px; margin-top: 8px; }
 
-/* Full-screen overlay used during gaze calibration. The four corner
-   dots are positioned absolutely in the viewport so they appear at
-   the user's real screen corners (well, at the tuner viewport edges).
-   Only one is highlighted at a time. */
+/* Full-screen overlay used during gaze calibration. 16 dots arranged
+   in a 4x4 grid covering the viewport; only one is highlighted at a
+   time while the user fixates on it. */
 .gaze-cal-overlay { position: fixed; inset: 0; background: #000c; backdrop-filter: blur(6px); z-index: 20; }
 .gaze-cal-overlay.hidden { display: none; }
-.gaze-cal-dot { position: absolute; width: 32px; height: 32px; border-radius: 50%; background: #ffffff22; border: 2px solid #ffffff44; transition: background 0.15s, transform 0.15s, box-shadow 0.15s; }
-.gaze-cal-dot.tl { top: 24px;    left: 24px; }
-.gaze-cal-dot.tr { top: 24px;    right: 24px; }
-.gaze-cal-dot.bl { bottom: 24px; left: 24px; }
-.gaze-cal-dot.br { bottom: 24px; right: 24px; }
-.gaze-cal-dot.c  { top: 50%; left: 50%; transform: translate(-50%, -50%); }
-.gaze-cal-dot.active { background: var(--accent); border-color: #fff; transform: scale(1.4); box-shadow: 0 0 24px var(--accent); }
-.gaze-cal-dot.c.active { transform: translate(-50%, -50%) scale(1.4); }
-.gaze-cal-box { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(90vw, 420px); padding: 24px; background: #11151aee; border: 1px solid var(--line2); border-radius: 14px; text-align: center; }
+.gaze-cal-grid { position: absolute; inset: 40px; pointer-events: none; }
+.gaze-cal-dot { position: absolute; width: 26px; height: 26px; border-radius: 50%; background: #ffffff22; border: 2px solid #ffffff33; transition: background 0.15s, transform 0.15s, box-shadow 0.15s; transform: translate(-50%, -50%); }
+.gaze-cal-dot.active { background: var(--accent); border-color: #fff; transform: translate(-50%, -50%) scale(1.6); box-shadow: 0 0 28px var(--accent); }
+.gaze-cal-dot.done { background: #16a34a55; border-color: #16a34a; }
+.gaze-cal-box { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(90vw, 420px); padding: 24px; background: #11151ad9; border: 1px solid var(--line2); border-radius: 14px; text-align: center; backdrop-filter: blur(2px); }
 .gaze-cal-box .step { font-size: 11px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; }
 .gaze-cal-box .title { font-size: 20px; font-weight: 800; margin-top: 10px; }
 .gaze-cal-box .sub { font-size: 13px; color: var(--muted); margin-top: 8px; }
 .gaze-cal-box .num { font-size: 48px; font-weight: 800; margin: 12px 0; font-variant-numeric: tabular-nums; }
-.gaze-cal-box.active .c { display: none; }
 .gaze-cal-box button { margin-top: 4px; }
-/* When the centre corner is active, hide the centred .c dot (it
-   would be covered by the box anyway). */
-.gaze-cal-overlay.active-c .c { display: none; }
 
 .hints { color: var(--muted); }
 .hints code { background: #0b0d10; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--fg); }

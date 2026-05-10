@@ -131,14 +131,11 @@
   </main>
 
   <div id="gazeCalOverlay" class="gaze-cal-overlay hidden">
-    <div class="gaze-cal-dot tl"></div>
-    <div class="gaze-cal-dot tr"></div>
-    <div class="gaze-cal-dot br"></div>
-    <div class="gaze-cal-dot bl"></div>
-    <div class="gaze-cal-dot c"></div>
+    <!-- 16 dots are generated dynamically by app.js into the grid -->
+    <div id="gazeCalGrid" class="gaze-cal-grid"></div>
     <div class="gaze-cal-box">
-      <div class="step">Calibration regard</div>
-      <div class="title" id="gazeCalTitle">Regarde le point qui clignote</div>
+      <div class="step" id="gazeCalStep">Calibration regard</div>
+      <div class="title" id="gazeCalTitle">Regarde le point bleu qui s'allume</div>
       <div class="sub" id="gazeCalSub">Garde la tête immobile. Ne suis qu'avec les yeux.</div>
       <div class="num" id="gazeCalNum">—</div>
       <button id="gazeCalCancel" class="ghost">Annuler</button>

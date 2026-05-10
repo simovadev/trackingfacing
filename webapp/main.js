@@ -112,24 +112,57 @@ function loadCalibration() {
   } catch { return emptyCalibration(); }
 }
 
-// Gaze calibration: maps the user's raw iris-in-eye ratio to the
-// normalized [-1, +1] range expected downstream. We capture min/max
-// for each axis when the user looks at the four screen corners.
+// Gaze calibration.
+//
+// Two formats are supported, distinguished by .kind:
+//   kind: "linear" : legacy min/max per axis. Cheap, very approximate.
+//   kind: "poly2"  : polynomial degree 2 in 4 features (gx, gy, yaw,
+//                    pitch). Two arrays of 15 coefs each (one per
+//                    output axis). The poly compensates head pose,
+//                    so the user can move their head slightly during
+//                    calibration without ruining the result.
+//
+// emptyGazeCalibration() returns a pass-through identity that doesn't
+// drive the cursor anywhere useful but doesn't crash the math either.
 function emptyGazeCalibration() {
-  return { x: { min: -0.15, max: 0.15 }, y: { min: -0.10, max: 0.10 } };
+  return { kind: "linear", x: { min: -0.15, max: 0.15 }, y: { min: -0.10, max: 0.10 } };
 }
 function loadGazeCalibration() {
   try {
     const raw = localStorage.getItem(GAZE_CAL_KEY);
     if (!raw) return emptyGazeCalibration();
     const p = JSON.parse(raw);
-    if (!p?.x || !p?.y || !isSaneValue(p.x.min) || !isSaneValue(p.x.max) ||
-        !isSaneValue(p.y.min) || !isSaneValue(p.y.max)) return emptyGazeCalibration();
-    return p;
+    if (p?.kind === "poly2" && Array.isArray(p.coefX) && p.coefX.length === 15 &&
+        Array.isArray(p.coefY) && p.coefY.length === 15 &&
+        p.coefX.every(isSaneValue) && p.coefY.every(isSaneValue)) {
+      return p;
+    }
+    if (p?.kind === "linear" && p?.x && p?.y && isSaneValue(p.x.min) && isSaneValue(p.x.max) &&
+        isSaneValue(p.y.min) && isSaneValue(p.y.max)) {
+      return p;
+    }
+    return emptyGazeCalibration();
   } catch { return emptyGazeCalibration(); }
 }
 function saveGazeCalibration(c) {
   try { localStorage.setItem(GAZE_CAL_KEY, JSON.stringify(c)); } catch {}
+}
+
+// Polynomial features for (gx, gy, yaw, pitch) - degree 2 expansion:
+// [1, gx, gy, yaw, pitch, gx*gy, gx*yaw, gx*pitch, gy*yaw, gy*pitch,
+//  yaw*pitch, gx^2, gy^2, yaw^2, pitch^2]    => 15 features.
+function gazeFeatures(gx, gy, yaw, pitch) {
+  return [
+    1, gx, gy, yaw, pitch,
+    gx * gy, gx * yaw, gx * pitch, gy * yaw, gy * pitch,
+    yaw * pitch, gx * gx, gy * gy, yaw * yaw, pitch * pitch,
+  ];
+}
+
+function applyGazePoly(coef, features) {
+  let s = 0;
+  for (let i = 0; i < 15; i++) s += coef[i] * features[i];
+  return s;
 }
 function saveCalibration(c) { try { localStorage.setItem(CAL_KEY, JSON.stringify(c)); } catch {} }
 
@@ -332,20 +365,28 @@ function handleCommand(msg) {
       try { localStorage.removeItem(GAZE_CAL_KEY); } catch {}
       return;
     case "setGazeCalibration":
-      // PC-driven gaze calibration: the tuner samples raw gaze from
-      // phoneStatus while the user looks at each corner on the PC
-      // screen, then sends back the computed ranges.
-      if (msg.calibration && typeof msg.calibration === "object" &&
-          msg.calibration.x && msg.calibration.y &&
-          isSaneValue(msg.calibration.x.min) && isSaneValue(msg.calibration.x.max) &&
-          isSaneValue(msg.calibration.y.min) && isSaneValue(msg.calibration.y.max) &&
-          msg.calibration.x.min < msg.calibration.x.max &&
-          msg.calibration.y.min < msg.calibration.y.max) {
-        state.gazeCalibration = {
-          x: { min: msg.calibration.x.min, max: msg.calibration.x.max },
-          y: { min: msg.calibration.y.min, max: msg.calibration.y.max },
-        };
-        saveGazeCalibration(state.gazeCalibration);
+      // The tuner does the heavy lifting (sampling 16 points, fitting
+      // a polynomial) and sends back either:
+      //   { kind: "poly2", coefX: [15], coefY: [15] }  - preferred
+      //   { kind: "linear", x: {min,max}, y: {min,max} } - legacy
+      if (msg.calibration && typeof msg.calibration === "object") {
+        const c = msg.calibration;
+        if (c.kind === "poly2" && Array.isArray(c.coefX) && c.coefX.length === 15 &&
+            Array.isArray(c.coefY) && c.coefY.length === 15 &&
+            c.coefX.every(isSaneValue) && c.coefY.every(isSaneValue)) {
+          state.gazeCalibration = { kind: "poly2", coefX: c.coefX.slice(), coefY: c.coefY.slice() };
+          saveGazeCalibration(state.gazeCalibration);
+        } else if (c.kind === "linear" && c.x && c.y &&
+            isSaneValue(c.x.min) && isSaneValue(c.x.max) &&
+            isSaneValue(c.y.min) && isSaneValue(c.y.max) &&
+            c.x.min < c.x.max && c.y.min < c.y.max) {
+          state.gazeCalibration = {
+            kind: "linear",
+            x: { min: c.x.min, max: c.x.max },
+            y: { min: c.y.min, max: c.y.max },
+          };
+          saveGazeCalibration(state.gazeCalibration);
+        }
       }
       return;
     case "setCalibration":
@@ -1071,16 +1112,30 @@ function loop() {
         }
         if (out) {
           const t = now;
-          // Compute gaze (raw iris ratio) from the same frame's landmarks.
-          // Apply the per-user gaze calibration to normalize to [-1, +1],
-          // then filter. If gaze is unavailable, both axes default to 0.
+          // Compute gaze (raw iris ratio) from the same frame's landmarks
+          // and apply the per-user calibration. Two formats are supported:
+          //   poly2  : 15-coef polynomial that takes head yaw/pitch into
+          //            account, so the user can move their head slightly
+          //            without throwing off the cursor;
+          //   linear : legacy min/max per axis (4-corner calibration).
           const gazeRaw = computeGazeFromLandmarks(lastLandmarks);
           let gazeXOut = 0, gazeYOut = 0;
           if (gazeRaw) {
-            state.lastGazeRaw = gazeRaw;
+            // Include the head pose (in radians) so the tuner-side
+            // poly fit can compensate small head movements during use.
+            state.lastGazeRaw = { x: gazeRaw.x, y: gazeRaw.y, yaw: raw.yaw, pitch: raw.pitch };
             const gc = state.gazeCalibration;
-            const nx = mapGazeAxis(gazeRaw.x, gc.x);
-            const ny = mapGazeAxis(gazeRaw.y, gc.y);
+            let nx = 0, ny = 0;
+            if (gc?.kind === "poly2") {
+              const f = gazeFeatures(gazeRaw.x, gazeRaw.y, raw.yaw, raw.pitch);
+              nx = applyGazePoly(gc.coefX, f);
+              ny = applyGazePoly(gc.coefY, f);
+              nx = Math.max(-1, Math.min(1, nx));
+              ny = Math.max(-1, Math.min(1, ny));
+            } else if (gc?.kind === "linear") {
+              nx = mapGazeAxis(gazeRaw.x, gc.x);
+              ny = mapGazeAxis(gazeRaw.y, gc.y);
+            }
             gazeXOut = filters.gazeX.filter(nx, t);
             gazeYOut = filters.gazeY.filter(ny, t);
             state.lastGaze = { x: gazeXOut, y: gazeYOut };
