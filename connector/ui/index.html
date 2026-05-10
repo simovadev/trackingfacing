@@ -114,6 +114,13 @@
           <button id="gazeCalibrate">Calibrer le regard</button>
           <button id="gazeReset" class="ghost">Effacer calibration regard</button>
         </div>
+        <div class="gaze-row">
+          <label class="gaze-toggle">
+            <input id="gazeHeadFallback" type="checkbox" />
+            <span>Mode "Tête seule" (ignore les yeux, plus stable)</span>
+          </label>
+        </div>
+        <div id="gazeStats" class="gaze-stats muted">Aucune calibration enregistrée pendant cette session.</div>
         <div class="gaze-sliders">
           <label>Sensibilité X <input id="gazeSensX" type="range" min="0.2" max="3" step="0.05" value="1" /> <span id="gazeSensXVal">1.00</span></label>
           <label>Sensibilité Y <input id="gazeSensY" type="range" min="0.2" max="3" step="0.05" value="1" /> <span id="gazeSensYVal">1.00</span></label>

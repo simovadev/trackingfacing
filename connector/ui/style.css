@@ -135,6 +135,11 @@ section h2 { margin: 0 0 8px; font-size: 14px; font-weight: 700; opacity: 0.85; 
 .gaze .gaze-live { margin-top: 12px; font-size: 12px; font-variant-numeric: tabular-nums; }
 .gaze .gaze-live #gazeLive { color: #93c5fd; margin-left: 8px; }
 .gaze .small { font-size: 12px; margin-top: 8px; }
+.gaze-stats { margin-top: 12px; padding: 10px 12px; background: #0b0d10; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; line-height: 1.6; font-variant-numeric: tabular-nums; }
+.gaze-stats .ok { color: #4ade80; font-weight: 700; }
+.gaze-stats .warn { color: #fbbf24; font-weight: 700; }
+.gaze-stats .bad { color: #f87171; font-weight: 700; }
+.gaze-stats .small { font-size: 11px; }
 
 /* Full-screen overlay used during gaze calibration. 16 dots arranged
    in a 4x4 grid covering the viewport; only one is highlighted at a

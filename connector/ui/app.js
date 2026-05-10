@@ -60,6 +60,8 @@ const els = {
   gazeCalCancel: document.getElementById("gazeCalCancel"),
   gazeCalStep: document.getElementById("gazeCalStep"),
   cameraPosition: document.getElementById("cameraPosition"),
+  gazeHeadFallback: document.getElementById("gazeHeadFallback"),
+  gazeStats: document.getElementById("gazeStats"),
 };
 
 const PO_CIRC = 2 * Math.PI * 46;
@@ -74,6 +76,7 @@ const state = {
   lastTs: performance.now(),
   pc: null,
   rtcWanted: false,
+  lastGazeCal: null, // populated after each calibration
 };
 
 // ----- Settings rows -----------------------------------------------------
@@ -449,6 +452,10 @@ function connectWS() {
             els.cameraPosition.value !== msg.phone.cameraPosition) {
           els.cameraPosition.value = msg.phone.cameraPosition;
         }
+        if (msg.phone && typeof msg.phone.gazeHeadFallback === "boolean" &&
+            els.gazeHeadFallback && els.gazeHeadFallback.checked !== msg.phone.gazeHeadFallback) {
+          els.gazeHeadFallback.checked = msg.phone.gazeHeadFallback;
+        }
         // Live gaze indicator + sample collection during gaze calibration.
         if (msg.phone) {
           const gr = msg.phone.lastGazeRaw;
@@ -784,11 +791,43 @@ function finalizeGazeCalibration() {
   }
   const rmsX = Math.sqrt(rssX / X.length);
   const rmsY = Math.sqrt(rssY / X.length);
+  const sampleCounts = gazeCal.samples.map((s) => s.length);
   console.log(`[gaze cal] ${usable} points, RMS error: x=${rmsX.toFixed(3)} y=${rmsY.toFixed(3)} (in [-1,+1] space)`);
+  console.log(`[gaze cal] samples per point:`, sampleCounts);
+  // Persist last calibration metrics so the user can see them in the UI.
+  state.lastGazeCal = {
+    rmsX, rmsY,
+    usablePoints: usable,
+    totalPoints: GAZE_GRID.length,
+    samplesPerPoint: sampleCounts,
+    timestamp: Date.now(),
+  };
+  renderGazeStats();
   sendCommand({
     type: "setGazeCalibration",
     calibration: { kind: "poly2", coefX, coefY },
   });
+}
+
+function renderGazeStats() {
+  if (!els.gazeStats) return;
+  const c = state.lastGazeCal;
+  if (!c) {
+    els.gazeStats.innerHTML = '<span class="muted">Aucune calibration enregistrée pendant cette session.</span>';
+    return;
+  }
+  const qualityX = c.rmsX < 0.15 ? "ok" : c.rmsX < 0.30 ? "warn" : "bad";
+  const qualityY = c.rmsY < 0.15 ? "ok" : c.rmsY < 0.30 ? "warn" : "bad";
+  const samplesMin = Math.min(...c.samplesPerPoint);
+  const samplesAvg = Math.round(c.samplesPerPoint.reduce((a, b) => a + b, 0) / c.samplesPerPoint.length);
+  const ok = qualityX === "ok" && qualityY === "ok";
+  els.gazeStats.innerHTML = `
+    <div><b>Dernière calibration</b> (${c.usablePoints}/${c.totalPoints} points)</div>
+    <div>RMS X = <span class="${qualityX}">${c.rmsX.toFixed(3)}</span> &middot; RMS Y = <span class="${qualityY}">${c.rmsY.toFixed(3)}</span></div>
+    <div>Samples par point : min ${samplesMin}, moy ${samplesAvg}</div>
+    <div class="muted small">Cible : RMS &lt; 0.15 (bon), &lt; 0.30 (moyen), au-dessus &rarr; refaire la calibration ou remonter le téléphone au niveau des yeux.</div>
+    ${ok ? '' : '<div class="warn small">⚠ Calibration de qualité moyenne. Si la souris part en vrille, active le mode "Tête seule" ci-dessous.</div>'}
+  `;
 }
 
 els.gazeCalibrate.addEventListener("click", startGazeCalibration);
@@ -799,6 +838,14 @@ if (els.cameraPosition) {
     sendCommand({ type: "setCameraPosition", position: els.cameraPosition.value });
   });
 }
+
+if (els.gazeHeadFallback) {
+  els.gazeHeadFallback.addEventListener("change", () => {
+    sendCommand({ type: "setGazeHeadFallback", enabled: els.gazeHeadFallback.checked });
+  });
+}
+
+renderGazeStats();
 
 updateGazeSliderLabels();
 

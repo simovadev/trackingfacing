@@ -204,6 +204,9 @@ const state = {
   // Affects the natural pitch the camera sees AND the iris-vs-orbit
   // sign for vertical gaze.
   cameraPosition: localStorage.getItem("tracksmfs.cameraPosition") || "centre",
+  // Safety mode: drive the cursor from head pose only, ignore iris.
+  // Useful when the camera angle is too steep for reliable eye tracking.
+  gazeHeadFallback: localStorage.getItem("tracksmfs.gazeHeadFallback") === "1",
 };
 
 // Pitch the phone naturally adds to the raw head pose when placed at
@@ -378,6 +381,10 @@ function handleCommand(msg) {
         state.cameraPosition = msg.position;
         try { localStorage.setItem("tracksmfs.cameraPosition", msg.position); } catch {}
       }
+      return;
+    case "setGazeHeadFallback":
+      state.gazeHeadFallback = !!msg.enabled;
+      try { localStorage.setItem("tracksmfs.gazeHeadFallback", msg.enabled ? "1" : "0"); } catch {}
       return;
     case "resetGazeCalibration":
       state.gazeCalibration = emptyGazeCalibration();
@@ -939,6 +946,7 @@ function maybeSendStatus(now) {
     lastGaze: state.lastGaze,
     lastGazeRaw: state.lastGazeRaw,
     cameraPosition: state.cameraPosition,
+    gazeHeadFallback: state.gazeHeadFallback,
   };
   if (state.mode === "countdown") {
     const total = state.countdownTotalMs || 10000;
@@ -1159,7 +1167,13 @@ function loop() {
             state.lastGazeRaw = { x: gazeRaw.x, y: gazeRaw.y, yaw: raw.yaw, pitch: raw.pitch };
             const gc = state.gazeCalibration;
             let nx = 0, ny = 0;
-            if (gc?.kind === "poly2") {
+            if (state.gazeHeadFallback) {
+              // Safety net when iris-based gaze is too unreliable
+              // (camera angle too steep, etc.): drive the cursor with
+              // head pose alone. 0.6 rad (~34 deg) maps to a full +/- 1.
+              nx = Math.max(-1, Math.min(1, raw.yaw   / 0.6));
+              ny = Math.max(-1, Math.min(1, raw.pitch / 0.6));
+            } else if (gc?.kind === "poly2") {
               const f = gazeFeatures(gazeRaw.x, gazeRaw.y, raw.yaw, raw.pitch);
               nx = applyGazePoly(gc.coefX, f);
               ny = applyGazePoly(gc.coefY, f);

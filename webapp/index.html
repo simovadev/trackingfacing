@@ -9,7 +9,9 @@
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; background: #0b0d10; color: #e7eaee; font-family: -apple-system, system-ui, sans-serif; overflow: hidden; }
     #stage { position: fixed; inset: 0; display: grid; place-items: center; }
-    video { width: 100vw; height: 100vh; object-fit: cover; }
+    /* contain instead of cover: no digital crop/zoom on the displayed
+       feed so the user sees exactly what MediaPipe sees. */
+    video { width: 100vw; height: 100vh; object-fit: contain; background: #000; }
     #gizmo { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; }
 
     /* Bandeau de statut en haut */
