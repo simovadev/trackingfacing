@@ -39,6 +39,8 @@ const els = {
   resetCal: document.getElementById("resetCal"),
   bypass: document.getElementById("bypass"),
   calDiag: document.getElementById("calDiag"),
+  debugRecord: document.getElementById("debugRecord"),
+  debugStatus: document.getElementById("debugStatus"),
 };
 
 const PO_CIRC = 2 * Math.PI * 46;
@@ -150,6 +152,7 @@ function refreshButtons() {
   els.gizmoToggle.disabled = !ready;
   els.resetCal.disabled = !ready;
   els.bypass.disabled = !ready;
+  els.debugRecord.disabled = !ready;
 }
 
 function updateLive(live) {
@@ -335,6 +338,17 @@ function connectWS() {
         if (msg.phone && typeof msg.phone.bypass === "boolean") {
           els.bypass.checked = msg.phone.bypass;
         }
+      } else if (msg.type === "debug") {
+        if (msg.phase === "start") {
+          els.debugStatus.textContent = "enregistrement en cours…";
+          els.debugRecord.disabled = true;
+        } else if (msg.phase === "end") {
+          els.debugStatus.textContent = `${msg.frames} frames → ${msg.path}`;
+          els.debugRecord.disabled = false;
+        } else if (msg.phase === "error") {
+          els.debugStatus.textContent = `erreur : ${msg.message}`;
+          els.debugRecord.disabled = false;
+        }
       }
     } catch {}
   };
@@ -392,6 +406,11 @@ els.resetCal.addEventListener("click", () => {
 
 els.bypass.addEventListener("change", () => {
   sendCommand({ type: "setBypass", enabled: els.bypass.checked });
+});
+
+els.debugRecord.addEventListener("click", () => {
+  els.debugStatus.textContent = "démarrage…";
+  sendCommand({ type: "startDebugRecording", duration: 5 });
 });
 
 (async () => {

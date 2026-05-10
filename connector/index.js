@@ -148,6 +148,7 @@ let ws;
 let backoffMs = 500;
 let heartbeat = null;
 let lastPongAt = 0;
+let debugBuffer = null; // null = not recording, [] = recording in progress
 
 function decodeBinaryPose(buf) {
   if (buf.length !== 25 || buf[0] !== 0x01) return null;
@@ -211,6 +212,48 @@ function connectRelay() {
       }
       if (msg.type === "phoneStatus") {
         broadcastTuner({ type: "phoneStatus", phone: msg });
+        return;
+      }
+      if (msg.type === "debugRecordingStart") {
+        debugBuffer = [];
+        broadcastTuner({ type: "debug", phase: "start" });
+        return;
+      }
+      if (msg.type === "debugFrame") {
+        if (debugBuffer) {
+          // Snapshot current OpenTrack output (after gain/expo) too.
+          const out = state.lastOut ? { ...state.lastOut } : null;
+          debugBuffer.push({
+            t: msg.t,
+            matrix: msg.matrix,
+            raw: msg.raw,
+            center: msg.center,
+            mode: msg.mode,
+            bypass: msg.bypass,
+            opentrackOut: out,
+          });
+        }
+        return;
+      }
+      if (msg.type === "debugRecordingEnd") {
+        if (debugBuffer) {
+          const path2 = require("node:path");
+          const dest = path2.join(settingsDir, "debug-recording.json");
+          try {
+            fs.mkdirSync(settingsDir, { recursive: true });
+            fs.writeFileSync(dest, JSON.stringify({
+              capturedAt: new Date().toISOString(),
+              frames: debugBuffer,
+              settings,
+            }, null, 2));
+            console.log("[connector] debug recording saved: " + dest + " (" + debugBuffer.length + " frames)");
+            broadcastTuner({ type: "debug", phase: "end", path: dest, frames: debugBuffer.length });
+          } catch (e) {
+            console.error("[connector] debug write failed:", e.message);
+            broadcastTuner({ type: "debug", phase: "error", message: e.message });
+          }
+          debugBuffer = null;
+        }
         return;
       }
       if (typeof msg.yaw === "number") sendPose(msg);

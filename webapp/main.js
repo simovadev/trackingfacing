@@ -92,6 +92,9 @@ const state = {
   pc: null,
   gizmoEnabled: true,
   bypass: false,
+  bypassCenter: null,
+  debugRecording: false,
+  debugRecordingEndAt: 0,
 };
 
 // Bypass mode: send angles in degrees / translations in cm without
@@ -240,6 +243,11 @@ function handleCommand(msg) {
     case "setBypass":
       state.bypass = !!msg.enabled;
       state.bypassCenter = null;
+      return;
+    case "startDebugRecording":
+      state.debugRecording = true;
+      state.debugRecordingEndAt = performance.now() + Number(msg.duration ?? 5) * 1000;
+      send({ type: "debugRecordingStart" });
       return;
   }
 }
@@ -596,8 +604,12 @@ const STEPS = [
   { axis: "yaw",   sign: +1, arrow: "→",  title: "Tourne la tête à fond à droite", sub: "Sans bouger les épaules.",                    duration: 5000 },
   { axis: "pitch", sign: +1, arrow: "↑",  title: "Regarde en haut",                sub: "Lève la tête au max confortable.",            duration: 5000 },
   { axis: "pitch", sign: -1, arrow: "↓",  title: "Regarde en bas",                 sub: "Baisse la tête au max confortable.",          duration: 5000 },
+  { axis: "roll",  sign: -1, arrow: "↶",  title: "Penche la tête sur l'épaule gauche", sub: "Tête seule, oreille vers l'épaule.",      duration: 5000 },
+  { axis: "roll",  sign: +1, arrow: "↷",  title: "Penche la tête sur l'épaule droite", sub: "Tête seule, oreille vers l'épaule.",      duration: 5000 },
   { axis: "x",     sign: -1, arrow: "↤",  title: "Glisse la tête à gauche",        sub: "Translation latérale, ne penche pas.",        duration: 5000 },
   { axis: "x",     sign: +1, arrow: "↦",  title: "Glisse la tête à droite",        sub: "Translation latérale, ne penche pas.",        duration: 5000 },
+  { axis: "y",     sign: +1, arrow: "⇡",  title: "Lève la tête (allonge le cou)",  sub: "Le visage monte, ne pas pencher.",            duration: 5000 },
+  { axis: "y",     sign: -1, arrow: "⇣",  title: "Baisse la tête (rentre le cou)", sub: "Le visage descend, ne pas pencher.",          duration: 5000 },
   { axis: "z",     sign: +1, arrow: "⊕",  title: "Approche la tête",               sub: "Avance vers la caméra.",                       duration: 5000 },
   { axis: "z",     sign: -1, arrow: "⊖",  title: "Recule la tête",                 sub: "Recule par rapport à la caméra.",              duration: 5000 },
 ];
@@ -669,6 +681,26 @@ function loop() {
       // First-run bootstrap (in case calibration is empty)
       if (!state.calibration.center) state.calibration.center = { ...raw };
 
+      // Debug recording: send a snapshot every frame to the connector
+      // so it can dump a JSON file. Includes the raw 4x4 matrix, the
+      // pose extracted by computePose, and the latest center.
+      if (state.debugRecording) {
+        if (now >= state.debugRecordingEndAt) {
+          state.debugRecording = false;
+          send({ type: "debugRecordingEnd" });
+        } else {
+          send({
+            type: "debugFrame",
+            t: now,
+            matrix: Array.from(matrices[0].data),
+            raw,
+            mode: state.mode,
+            bypass: state.bypass,
+            center: state.calibration.center,
+          });
+        }
+      }
+
       if (state.mode === "calibrating") {
         const step = STEPS[state.calStepIdx];
         const elapsed = now - state.calStepStart;
@@ -707,6 +739,9 @@ function loop() {
           });
         }
       } else if (state.mode === "active") {
+        // Debug recording: also enabled outside of "active" only when paired
+        // with calibration/bypass capture, but for now we keep it tied to
+        // active so we record what is actually sent to OpenTrack.
         let out;
         if (state.bypass) {
           // Bypass: still subtract an auto-captured center so the
