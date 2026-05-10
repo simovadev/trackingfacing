@@ -218,6 +218,7 @@ function handleCommand(msg) {
       if (state.lastRaw) {
         state.calibration.center = { ...state.lastRaw };
         saveCalibration(state.calibration);
+        state.bypassCenter = { ...state.lastRaw };
       }
       return;
     case "calibrate":
@@ -238,6 +239,7 @@ function handleCommand(msg) {
       return;
     case "setBypass":
       state.bypass = !!msg.enabled;
+      state.bypassCenter = null;
       return;
   }
 }
@@ -345,21 +347,31 @@ document.addEventListener("visibilitychange", async () => {
 
 // ----- Pose extraction ---------------------------------------------------
 
+// MediaPipe facialTransformationMatrix is column-major: R[col][row] = m[col*4+row].
+// In MediaPipe camera space, +X points right, +Y points up, +Z points out of
+// the screen toward the camera. Yaw = rotation around Y, pitch = rotation
+// around X, roll = rotation around Z. Decomposition order is Y then X then Z
+// (Ry * Rx * Rz), the standard head-tracking convention used by TrackIR.
+//
+// For R = Ry(yaw) * Rx(pitch) * Rz(roll):
+//   pitch = asin( R[2][1] )            // = m[6]
+//   yaw   = atan2( -R[2][0], R[2][2] ) // = atan2(-m[2], m[10])
+//   roll  = atan2( -R[0][1], R[1][1] ) // = atan2(-m[1], m[5])
 function eulerFromMatrix(m) {
-  const r10 = m[1];
-  const r02 = m[8];
-  const r12 = m[9];
-  const r22 = m[10];
-  const r11 = m[5];
-  const r00 = m[0];
-  const r20 = m[2];
-  const pitch = Math.asin(Math.max(-1, Math.min(1, -r12)));
+  const r01 = m[1];   // R[0][1]
+  const r05 = m[5];   // R[1][1]
+  const r02 = m[2];   // R[2][0]
+  const r06 = m[6];   // R[2][1]
+  const r10 = m[10];  // R[2][2]
+  const sp = Math.max(-1, Math.min(1, r06));
+  const pitch = Math.asin(sp);
   let yaw, roll;
-  if (Math.abs(r12) < 0.9999) {
-    yaw  = Math.atan2(r02, r22);
-    roll = Math.atan2(r10, r11);
+  if (Math.abs(sp) < 0.9999) {
+    yaw  = Math.atan2(-r02, r10);
+    roll = Math.atan2(-r01, r05);
   } else {
-    yaw = Math.atan2(-r20, r00);
+    // Gimbal lock: head looking straight up or down. Roll undefined.
+    yaw  = Math.atan2(m[8], m[0]);
     roll = 0;
   }
   return { yaw, pitch, roll };
@@ -697,18 +709,24 @@ function loop() {
       } else if (state.mode === "active") {
         let out;
         if (state.bypass) {
-          // No calibration: send raw angles converted to degrees and
-          // raw translations as-is, so the user can see ground-truth
-          // values in OpenTrack and the tuner.
+          // Bypass: still subtract an auto-captured center so the
+          // values are deltas around 0 (raw MediaPipe translations are
+          // in canonical-face units centered around ~50cm-from-camera,
+          // which would otherwise saturate). The center is captured
+          // the first frame after enabling bypass and discarded when
+          // bypass is turned off.
+          if (!state.bypassCenter) state.bypassCenter = { ...raw };
+          const c = state.bypassCenter;
           out = {
-            yaw:   raw.yaw   * BYPASS_DEG_GAIN,
-            pitch: raw.pitch * BYPASS_DEG_GAIN,
-            roll:  raw.roll  * BYPASS_DEG_GAIN,
-            x:     raw.x     * BYPASS_TR_GAIN,
-            y:     raw.y     * BYPASS_TR_GAIN,
-            z:     raw.z     * BYPASS_TR_GAIN,
+            yaw:   (raw.yaw   - c.yaw)   * BYPASS_DEG_GAIN,
+            pitch: (raw.pitch - c.pitch) * BYPASS_DEG_GAIN,
+            roll:  (raw.roll  - c.roll)  * BYPASS_DEG_GAIN,
+            x:     (raw.x     - c.x)     * BYPASS_TR_GAIN,
+            y:     (raw.y     - c.y)     * BYPASS_TR_GAIN,
+            z:     (raw.z     - c.z)     * BYPASS_TR_GAIN,
           };
         } else {
+          state.bypassCenter = null;
           out = applyCenterAndScale(raw);
         }
         if (out) {
