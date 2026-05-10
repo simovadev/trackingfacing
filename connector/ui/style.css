@@ -59,7 +59,7 @@ main.split .right { display: grid; gap: 22px; min-width: 0; }
 section { background: #11151a; border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
 section h2 { margin: 0 0 8px; font-size: 14px; font-weight: 700; opacity: 0.85; }
 
-.axes .head, .axes .row { display: grid; grid-template-columns: 70px 50px 60px minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) 80px 80px; gap: 8px; align-items: center; padding: 10px 6px; }
+.axes .head, .axes .row { display: grid; grid-template-columns: 80px 56px 64px minmax(120px,1.2fr) minmax(120px,1.2fr) minmax(120px,1.2fr) minmax(120px,1.2fr) 76px 76px; gap: 8px; align-items: center; padding: 10px 6px; }
 .axes .head { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
 .axes .row { border-bottom: 1px dashed var(--line); }
 .axes .row:last-child { border-bottom: none; }
@@ -87,9 +87,11 @@ section h2 { margin: 0 0 8px; font-size: 14px; font-weight: 700; opacity: 0.85; 
   }
 }
 
-.cell-ctl { display: flex; align-items: center; gap: 8px; }
-.cell-ctl input[type=range] { flex: 1; }
-.cell-ctl input[type=number] { width: 56px; padding: 6px 6px; border-radius: 6px; border: 1px solid var(--line2); background: #0b0d10; color: var(--fg); font: inherit; font-variant-numeric: tabular-nums; }
+.cell-ctl { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cell-ctl input[type=range] { flex: 1 1 auto; min-width: 0; width: 100%; }
+.cell-ctl input[type=number] { flex: 0 0 52px; width: 52px; min-width: 52px; padding: 6px 4px; border-radius: 6px; border: 1px solid var(--line2); background: #0b0d10; color: var(--fg); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; -moz-appearance: textfield; }
+.cell-ctl input[type=number]::-webkit-outer-spin-button,
+.cell-ctl input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
 .cell-val { font-variant-numeric: tabular-nums; padding: 6px 10px; border-radius: 6px; background: #0b0d10; border: 1px solid var(--line); text-align: right; }
 .cell-val.in { color: #93c5fd; }
