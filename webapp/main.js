@@ -252,15 +252,26 @@ function handleCommand(msg) {
       send({ type: "debugRecordingStart" });
       return;
     case "setCalibration":
-      // Manually overwrite the calibration (full or partial). Useful
-      // for fine-tuning ranges from the PC tuner.
+      // Partial-merge the incoming calibration into the existing one.
+      // We MUST merge key-by-key (not replace the object) otherwise
+      // editing a single field from the tuner wipes the other axes.
       if (msg.calibration && typeof msg.calibration === "object") {
-        if (msg.calibration.center) state.calibration.center = { ...msg.calibration.center };
+        if (!state.calibration.center) state.calibration.center = {};
+        if (!state.calibration.ranges) state.calibration.ranges = {};
+        if (msg.calibration.center) {
+          for (const k of RAW_KEYS) {
+            if (msg.calibration.center[k] != null) {
+              state.calibration.center[k] = msg.calibration.center[k];
+            }
+          }
+        }
         if (msg.calibration.ranges) {
           for (const k of RAW_KEYS) {
-            if (msg.calibration.ranges[k]) {
-              state.calibration.ranges[k] = { ...msg.calibration.ranges[k] };
-            }
+            const incoming = msg.calibration.ranges[k];
+            if (!incoming) continue;
+            if (!state.calibration.ranges[k]) state.calibration.ranges[k] = { ...FALLBACK[k] };
+            if (incoming.min != null) state.calibration.ranges[k].min = incoming.min;
+            if (incoming.max != null) state.calibration.ranges[k].max = incoming.max;
           }
         }
         saveCalibration(state.calibration);
