@@ -414,20 +414,52 @@ function eulerFromMatrix(m) {
 // with the position of the nose tip landmark (index 1) projected in
 // normalized screen coordinates and re-expressed in face-units, which
 // is dramatically more responsive for "head up/down" type movement.
+//
+// The phone may be held in physical portrait while the camera sensor
+// is in landscape (or vice versa). MediaPipe always interprets the
+// sensor as the reference frame, so when the phone is in portrait the
+// world-up axis is rotated 90 deg compared to the sensor. We detect
+// this from the live video dimensions and remap yaw/pitch/roll +
+// nose-tip X/Y accordingly so the axes always behave as the user
+// expects (yaw = turn head left/right, pitch = look up/down, etc).
 function computePose(matrix, landmarks) {
   const e = eulerFromMatrix(matrix);
+  const tz = matrix[14];
+
+  // Default (landscape phone): nose X is horizontal, nose Y vertical.
   let tx = matrix[12];
   let ty = matrix[13];
-  const tz = matrix[14];
+  let nx = 0, ny = 0;
   if (landmarks && landmarks.length > 1) {
-    const nose = landmarks[1]; // normalized [0..1] coordinates in image
-    // Convert to centered, scaled coordinates in face-units. The
-    // factor 50 brings the magnitude into the same order as the
-    // matrix translation (~ a few units when looking around).
-    tx = (nose.x - 0.5) * 50;
-    ty = (0.5 - nose.y) * 50; // y axis flipped: image y grows downward
+    const nose = landmarks[1];
+    nx = (nose.x - 0.5) * 50;
+    ny = (0.5 - nose.y) * 50;
   }
-  const raw = { yaw: e.yaw, pitch: e.pitch, roll: e.roll, x: tx, y: ty, z: tz };
+
+  // Detect orientation from the live video aspect ratio.
+  const vw = els.video.videoWidth || 1;
+  const vh = els.video.videoHeight || 1;
+  const portrait = vh > vw;
+
+  let yaw, pitch, roll, x, y;
+  if (portrait) {
+    // Phone held vertically: the sensor frame is rotated -90 deg from
+    // the world frame. What MediaPipe calls "yaw" is roll in the user
+    // frame, and vice versa.
+    yaw   = -e.roll;
+    pitch =  e.pitch;
+    roll  =  e.yaw;
+    x     =  ny;     // horizontal head motion shows up in the image's vertical axis
+    y     = -nx;
+  } else {
+    yaw   = e.yaw;
+    pitch = e.pitch;
+    roll  = e.roll;
+    x     = nx;
+    y     = ny;
+  }
+
+  const raw = { yaw, pitch, roll, x, y, z: tz };
   for (const k of RAW_KEYS) raw[k] *= REAR_CAMERA_FLIP[k];
   return raw;
 }
@@ -589,51 +621,25 @@ function drawGizmo(ctx, sourceWidth, sourceHeight, targetWidth, targetHeight) {
 }
 
 // Render a frame to the broadcast canvas: video + (optional) gizmo.
-// iOS Safari reports the rear camera in landscape regardless of the
-// phone's physical orientation, so we rotate the source 90 deg into
-// the canvas when the device is held in portrait. This way the PC
-// preview gets the actual portrait image the user sees.
+// We do NOT rotate the source: whatever the camera streams is shipped
+// as-is. The PC preview already adapts its aspect ratio to the actual
+// videoWidth/videoHeight, so we only need to keep the canvas in sync
+// with the source.
 function renderBroadcastFrame() {
   const vw = els.video.videoWidth;
   const vh = els.video.videoHeight;
   if (!vw) return;
-  const portrait = window.matchMedia && window.matchMedia("(orientation: portrait)").matches;
   const target = 720;
-  // Decide canvas dimensions based on the orientation we WANT to ship.
   let cw, ch;
-  if (portrait) {
-    // Rotate the landscape source by -90deg into a portrait canvas.
-    ch = target;
-    cw = Math.round(target * vh / vw);
-  } else if (vw >= vh) {
-    cw = target; ch = Math.round(target * vh / vw);
-  } else {
-    ch = target; cw = Math.round(target * vw / vh);
-  }
+  if (vw >= vh) { cw = target; ch = Math.round(target * vh / vw); }
+  else          { ch = target; cw = Math.round(target * vw / vh); }
   if (broadcastCanvas.width !== cw || broadcastCanvas.height !== ch) {
     broadcastCanvas.width = cw;
     broadcastCanvas.height = ch;
   }
-  if (portrait) {
-    broadcastCtx.save();
-    broadcastCtx.translate(cw / 2, ch / 2);
-    broadcastCtx.rotate(-Math.PI / 2);
-    // After rotation, the source is drawn as ch x cw in the canvas frame.
-    broadcastCtx.drawImage(els.video, -ch / 2, -cw / 2, ch, cw);
-    broadcastCtx.restore();
-    if (state.gizmoEnabled) {
-      // Draw gizmo into the same rotated frame so it lines up.
-      broadcastCtx.save();
-      broadcastCtx.translate(cw / 2, ch / 2);
-      broadcastCtx.rotate(-Math.PI / 2);
-      drawGizmo(broadcastCtx, vw, vh, ch, cw);
-      broadcastCtx.restore();
-    }
-  } else {
-    broadcastCtx.drawImage(els.video, 0, 0, cw, ch);
-    if (state.gizmoEnabled) {
-      drawGizmo(broadcastCtx, vw, vh, cw, ch);
-    }
+  broadcastCtx.drawImage(els.video, 0, 0, cw, ch);
+  if (state.gizmoEnabled) {
+    drawGizmo(broadcastCtx, vw, vh, cw, ch);
   }
 }
 
