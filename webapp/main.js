@@ -1,4 +1,8 @@
-import { FilesetResolver, FaceLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs";
+import {
+  FilesetResolver,
+  FaceLandmarker,
+  DrawingUtils,
+} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs";
 
 const els = {
   video: document.getElementById("video"),
@@ -436,17 +440,47 @@ function projectAxes(matrix, w, h) {
   return projected;
 }
 
+// One DrawingUtils per canvas, lazily created (it caches the 2D context).
+const drawingUtilsByCtx = new WeakMap();
+function getDrawingUtils(ctx) {
+  let du = drawingUtilsByCtx.get(ctx);
+  if (!du) {
+    du = new DrawingUtils(ctx);
+    drawingUtilsByCtx.set(ctx, du);
+  }
+  return du;
+}
+
 function drawGizmo(ctx, sourceWidth, sourceHeight, targetWidth, targetHeight) {
   if (!lastLandmarks) return;
   const w = targetWidth, h = targetHeight;
-  // Mesh dots
-  ctx.fillStyle = "rgba(255,255,255,0.55)";
-  for (const lm of lastLandmarks) {
-    const x = lm.x * w;
-    const y = lm.y * h;
-    ctx.fillRect(x - 0.5, y - 0.5, 1.5, 1.5);
+  ctx.save();
+  // DrawingUtils projects normalized landmarks onto the current canvas size,
+  // so we just need to make sure the context's transform is identity.
+  const du = getDrawingUtils(ctx);
+  // Tesselation: full face mesh, thin and translucent.
+  du.drawConnectors(lastLandmarks, FaceLandmarker.FACE_LANDMARKS_TESSELATION,
+    { color: "rgba(255,255,255,0.25)", lineWidth: 1 });
+  // Feature contours: thicker and colored.
+  du.drawConnectors(lastLandmarks, FaceLandmarker.FACE_LANDMARKS_FACE_OVAL,
+    { color: "#22c55e", lineWidth: 2 });
+  du.drawConnectors(lastLandmarks, FaceLandmarker.FACE_LANDMARKS_LEFT_EYE,
+    { color: "#3b82f6", lineWidth: 2 });
+  du.drawConnectors(lastLandmarks, FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE,
+    { color: "#3b82f6", lineWidth: 2 });
+  du.drawConnectors(lastLandmarks, FaceLandmarker.FACE_LANDMARKS_LEFT_EYEBROW,
+    { color: "#a855f7", lineWidth: 2 });
+  du.drawConnectors(lastLandmarks, FaceLandmarker.FACE_LANDMARKS_RIGHT_EYEBROW,
+    { color: "#a855f7", lineWidth: 2 });
+  du.drawConnectors(lastLandmarks, FaceLandmarker.FACE_LANDMARKS_LIPS,
+    { color: "#f43f5e", lineWidth: 2 });
+  if (FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS) {
+    du.drawConnectors(lastLandmarks, FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS,
+      { color: "#fbbf24", lineWidth: 2 });
+    du.drawConnectors(lastLandmarks, FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS,
+      { color: "#fbbf24", lineWidth: 2 });
   }
-  // Axes from the facial transformation matrix
+  // Axes from the facial transformation matrix.
   if (lastMatrix) {
     const [o, xT, yT, zT] = projectAxes(lastMatrix, w, h);
     ctx.lineWidth = 3;
@@ -466,6 +500,7 @@ function drawGizmo(ctx, sourceWidth, sourceHeight, targetWidth, targetHeight) {
     drawAxis(yT, "#22c55e"); // Y green
     drawAxis(zT, "#3b82f6"); // Z blue
   }
+  ctx.restore();
 }
 
 // Render a frame to the broadcast canvas: video + (optional) gizmo.
