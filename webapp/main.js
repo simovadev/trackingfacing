@@ -273,11 +273,17 @@ function handleCommand(msg) {
 
 async function initCamera() {
   setPill(els.cam, "caméra : demande…");
+  // Detect orientation: if the phone is held in portrait (most likely),
+  // ask for a 720x1280 stream; in landscape we ask 1280x720. iOS/Safari
+  // honors these as a hint and falls back to whatever the sensor offers.
+  const portrait = window.matchMedia && window.matchMedia("(orientation: portrait)").matches;
+  const w = portrait ? 720 : 1280;
+  const h = portrait ? 1280 : 720;
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: false,
     video: {
       facingMode: { ideal: "environment" },
-      width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 },
+      width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: 60 },
     },
   });
   state.stream = stream;
@@ -584,11 +590,22 @@ function drawGizmo(ctx, sourceWidth, sourceHeight, targetWidth, targetHeight) {
 
 // Render a frame to the broadcast canvas: video + (optional) gizmo.
 function renderBroadcastFrame() {
-  if (!els.video.videoWidth) return;
-  const w = broadcastCanvas.width, h = broadcastCanvas.height;
+  const vw = els.video.videoWidth;
+  const vh = els.video.videoHeight;
+  if (!vw) return;
+  // Resize the broadcast canvas to match the video orientation, capped
+  // at 720 long edge to keep the WebRTC bitrate reasonable.
+  const target = 720;
+  let w, h;
+  if (vw >= vh) { w = target; h = Math.round(target * vh / vw); }
+  else          { h = target; w = Math.round(target * vw / vh); }
+  if (broadcastCanvas.width !== w || broadcastCanvas.height !== h) {
+    broadcastCanvas.width = w;
+    broadcastCanvas.height = h;
+  }
   broadcastCtx.drawImage(els.video, 0, 0, w, h);
   if (state.gizmoEnabled) {
-    drawGizmo(broadcastCtx, els.video.videoWidth, els.video.videoHeight, w, h);
+    drawGizmo(broadcastCtx, vw, vh, w, h);
   }
 }
 

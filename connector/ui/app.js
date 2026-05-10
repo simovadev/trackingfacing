@@ -219,6 +219,20 @@ async function ensurePeer() {
     els.rtcVideo.srcObject = stream;
     els.rtcOverlay.classList.add("hidden");
     setRtcStatus("aperçu en cours");
+    // Adapt the preview stage's aspect ratio to whatever the phone
+    // is actually streaming (portrait if the phone is held vertically,
+    // landscape if not). Done on every resize event reported by the
+    // <video> element, so it also tracks orientation changes.
+    const updateRatio = () => {
+      const w = els.rtcVideo.videoWidth, h = els.rtcVideo.videoHeight;
+      if (w > 0 && h > 0) {
+        const stage = els.rtcVideo.parentElement;
+        stage.style.aspectRatio = `${w} / ${h}`;
+      }
+    };
+    els.rtcVideo.addEventListener("loadedmetadata", updateRatio, { once: false });
+    els.rtcVideo.addEventListener("resize", updateRatio);
+    updateRatio();
   };
   pc.onicecandidate = (e) => { if (e.candidate) rtcSendSignal({ kind: "ice", candidate: e.candidate }); };
   pc.onconnectionstatechange = () => {

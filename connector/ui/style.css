@@ -39,11 +39,11 @@ main { padding: 22px; display: grid; gap: 22px; }
 /* Two-column layout: big camera left, controls + axes right. The
    left column stays sticky so the camera stays in view while the
    user scrolls the right column. */
-main.split { grid-template-columns: minmax(540px, 1.4fr) minmax(540px, 1fr); align-items: start; }
+main.split { grid-template-columns: minmax(420px, 1fr) minmax(640px, 1.6fr); align-items: start; }
 main.split .left { position: sticky; top: 78px; display: grid; gap: 22px; }
-main.split .right { display: grid; gap: 22px; }
+main.split .right { display: grid; gap: 22px; min-width: 0; }
 
-@media (max-width: 1200px) {
+@media (max-width: 1280px) {
   main.split { grid-template-columns: 1fr; }
   main.split .left { position: static; }
 }
@@ -51,7 +51,7 @@ main.split .right { display: grid; gap: 22px; }
 section { background: #11151a; border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
 section h2 { margin: 0 0 8px; font-size: 14px; font-weight: 700; opacity: 0.85; }
 
-.axes .head, .axes .row { display: grid; grid-template-columns: 80px 60px 70px 1fr 1fr 1fr 1fr 100px 100px; gap: 10px; align-items: center; padding: 10px 6px; }
+.axes .head, .axes .row { display: grid; grid-template-columns: 70px 50px 60px minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) 80px 80px; gap: 8px; align-items: center; padding: 10px 6px; }
 .axes .head { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
 .axes .row { border-bottom: 1px dashed var(--line); }
 .axes .row:last-child { border-bottom: none; }
@@ -60,7 +60,7 @@ section h2 { margin: 0 0 8px; font-size: 14px; font-weight: 700; opacity: 0.85; 
 
 .cell-ctl { display: flex; align-items: center; gap: 8px; }
 .cell-ctl input[type=range] { flex: 1; }
-.cell-ctl input[type=number] { width: 70px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line2); background: #0b0d10; color: var(--fg); font: inherit; font-variant-numeric: tabular-nums; }
+.cell-ctl input[type=number] { width: 56px; padding: 6px 6px; border-radius: 6px; border: 1px solid var(--line2); background: #0b0d10; color: var(--fg); font: inherit; font-variant-numeric: tabular-nums; }
 
 .cell-val { font-variant-numeric: tabular-nums; padding: 6px 10px; border-radius: 6px; background: #0b0d10; border: 1px solid var(--line); text-align: right; }
 .cell-val.in { color: #93c5fd; }
@@ -71,7 +71,9 @@ section h2 { margin: 0 0 8px; font-size: 14px; font-weight: 700; opacity: 0.85; 
 .preview h2 { margin: 0; }
 .preview-actions { display: flex; align-items: center; gap: 12px; }
 .preview-actions .muted { color: var(--muted); font-size: 12px; }
-.preview-stage { position: relative; aspect-ratio: 16 / 9; background: #000; width: 100%; }
+/* Default to 9:16 (portrait phone) but JS overrides this with the
+   real video aspect ratio as soon as the WebRTC track arrives. */
+.preview-stage { position: relative; aspect-ratio: 9 / 16; max-height: calc(100vh - 220px); background: #000; width: 100%; margin: 0 auto; }
 .preview-stage video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
 .preview-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 14px; pointer-events: none; }
 .preview-empty.hidden { display: none; }
