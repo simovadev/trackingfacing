@@ -6,9 +6,11 @@ const els = {
   ws: document.getElementById("ws"),
   cam: document.getElementById("cam"),
   model: document.getElementById("model"),
+  wake: document.getElementById("wake"),
   stats: document.getElementById("stats"),
   start: document.getElementById("start"),
   recenter: document.getElementById("recenter"),
+  flip: document.getElementById("flip"),
 };
 
 const state = {
@@ -19,6 +21,8 @@ const state = {
   lastSendAt: 0,
   frames: 0,
   fpsAt: performance.now(),
+  facingMode: "user",
+  wakeLock: null,
 };
 
 function setPill(el, text, cls) {
@@ -41,14 +45,35 @@ function connectWS() {
 
 async function initCamera() {
   setPill(els.cam, "cam: requesting");
+  const prev = els.video.srcObject;
+  if (prev) prev.getTracks().forEach((t) => t.stop());
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: false,
-    video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 60 } },
+    video: { facingMode: state.facingMode, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 60 } },
   });
   els.video.srcObject = stream;
+  // Mirror only the front camera to keep movement intuitive.
+  els.video.style.transform = state.facingMode === "user" ? "scaleX(-1)" : "scaleX(1)";
   await els.video.play();
-  setPill(els.cam, `cam: ${els.video.videoWidth}x${els.video.videoHeight}`, "ok");
+  setPill(els.cam, `cam: ${state.facingMode === "user" ? "front" : "rear"} ${els.video.videoWidth}x${els.video.videoHeight}`, "ok");
 }
+
+async function acquireWakeLock() {
+  if (!("wakeLock" in navigator)) { setPill(els.wake, "wake: n/a"); return; }
+  try {
+    state.wakeLock = await navigator.wakeLock.request("screen");
+    setPill(els.wake, "wake: on", "ok");
+    state.wakeLock.addEventListener("release", () => setPill(els.wake, "wake: off"));
+  } catch (e) {
+    setPill(els.wake, "wake: denied", "bad");
+  }
+}
+
+document.addEventListener("visibilitychange", async () => {
+  if (document.visibilityState === "visible" && state.running && !state.wakeLock) {
+    await acquireWakeLock();
+  }
+});
 
 async function initModel() {
   setPill(els.model, "model: loading");
@@ -180,6 +205,7 @@ els.start.addEventListener("click", async () => {
     connectWS();
     await initCamera();
     await initModel();
+    await acquireWakeLock();
     state.running = true;
     requestAnimationFrame(loop);
   } catch (e) {
@@ -190,3 +216,15 @@ els.start.addEventListener("click", async () => {
 });
 
 els.recenter.addEventListener("click", () => { state.center = null; });
+
+els.flip.addEventListener("click", async () => {
+  state.facingMode = state.facingMode === "user" ? "environment" : "user";
+  state.center = null;
+  if (state.running) {
+    try { await initCamera(); }
+    catch (e) {
+      state.facingMode = state.facingMode === "user" ? "environment" : "user";
+      await initCamera();
+    }
+  }
+});

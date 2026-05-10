@@ -9,7 +9,8 @@
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; background: #0b0d10; color: #e7eaee; font-family: -apple-system, system-ui, sans-serif; }
     #stage { position: fixed; inset: 0; display: grid; place-items: center; }
-    video, canvas { width: 100vw; height: 100vh; object-fit: cover; transform: scaleX(-1); }
+    video, canvas { width: 100vw; height: 100vh; object-fit: cover; }
+    video { transform: scaleX(-1); }
     canvas { position: fixed; inset: 0; pointer-events: none; }
     #hud { position: fixed; top: env(safe-area-inset-top, 0); left: 0; right: 0; padding: 12px 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; background: linear-gradient(#0b0d10cc, transparent); }
     #hud .pill { font-size: 12px; padding: 6px 10px; border-radius: 999px; background: #ffffff14; border: 1px solid #ffffff1f; }
@@ -31,6 +32,7 @@
     <span class="pill" id="ws">ws: idle</span>
     <span class="pill" id="cam">cam: idle</span>
     <span class="pill" id="model">model: idle</span>
+    <span class="pill" id="wake">wake: off</span>
   </div>
 
   <div id="stats"></div>
@@ -38,6 +40,7 @@
   <div id="ctrl">
     <button id="start" class="primary">Start</button>
     <button id="recenter">Re-center</button>
+    <button id="flip">Flip cam</button>
   </div>
 
   <script type="module" src="./main.js"></script>
