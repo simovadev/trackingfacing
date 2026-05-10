@@ -6,6 +6,7 @@ const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
+const { spawn } = require("node:child_process");
 
 // ----- Paths (must work both in dev and inside a pkg .exe) -------------
 
@@ -37,6 +38,16 @@ function defaultSettings() {
     x:     tx(0.5, 1.4),
     y:     tx(0.5, 1.4),
     z:     tx(0.6, 1.3),
+    // Gaze-driven mouse cursor. enabled here means "the connector will
+    // move the cursor when phone sends gaze". The user can also pause
+    // it from the tuner without losing the calibration / sensitivity.
+    gaze: {
+      enabled: false,
+      sensitivityX: 1.0,   // multiplier on the normalized [-1,+1] gaze
+      sensitivityY: 1.0,
+      deadzone: 0.05,      // ignore tiny gaze around center
+      smoothing: 0.25,     // 0 = no smoothing, 1 = max lag
+    },
   };
 }
 
@@ -46,6 +57,7 @@ function loadSettings() {
     const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
     const merged = defaultSettings();
     for (const a of AXES) if (parsed[a]) Object.assign(merged[a], parsed[a]);
+    if (parsed.gaze && typeof parsed.gaze === "object") Object.assign(merged.gaze, parsed.gaze);
     return merged;
   } catch (e) {
     console.error("[connector] failed to load settings:", e.message);
@@ -67,6 +79,103 @@ function saveSettings(s) {
 let settings = loadSettings();
 
 // ----- UDP to OpenTrack (6 LE doubles, 48 bytes) -----------------------
+
+// ----- Persistent PowerShell mouse driver ------------------------------
+//
+// Spawning powershell.exe per cursor update would cost ~50 ms per call,
+// way too slow for a 60 Hz tracker. Instead we spawn ONE long-running
+// PowerShell, hand it a tiny script that reads "X,Y" lines from stdin
+// and calls Cursor.Position on each. Latency drops to ~1-2 ms.
+//
+// The script also prints the primary screen resolution once so we know
+// where to map gaze coordinates.
+
+const mouse = {
+  proc: null,
+  screenW: 1920,
+  screenH: 1080,
+  lastSentX: 0,
+  lastSentY: 0,
+  smoothedX: 0,
+  smoothedY: 0,
+  hasSmooth: false,
+};
+
+function startMouseDriver() {
+  if (mouse.proc) return;
+  const script = `
+    Add-Type -AssemblyName System.Windows.Forms
+    $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    Write-Host ("RESOLUTION " + $b.Width + " " + $b.Height)
+    while ($line = [Console]::In.ReadLine()) {
+      $parts = $line -split ','
+      if ($parts.Count -eq 2) {
+        $x = [int]$parts[0]
+        $y = [int]$parts[1]
+        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($x, $y)
+      }
+    }
+  `.trim();
+  try {
+    mouse.proc = spawn("powershell.exe", [
+      "-NoLogo", "-NoProfile", "-NonInteractive",
+      "-ExecutionPolicy", "Bypass",
+      "-Command", script,
+    ], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    mouse.proc.stdout.setEncoding("utf8");
+    mouse.proc.stdout.on("data", (chunk) => {
+      const m = chunk.match(/RESOLUTION\s+(\d+)\s+(\d+)/);
+      if (m) {
+        mouse.screenW = Number(m[1]);
+        mouse.screenH = Number(m[2]);
+        console.log("[mouse] screen detected: " + mouse.screenW + "x" + mouse.screenH);
+      }
+    });
+    mouse.proc.on("exit", () => { mouse.proc = null; });
+    mouse.proc.on("error", (e) => { console.error("[mouse] driver error:", e.message); mouse.proc = null; });
+  } catch (e) {
+    console.error("[mouse] failed to start driver:", e.message);
+  }
+}
+
+function moveCursorTo(x, y) {
+  if (!mouse.proc) return;
+  const ix = Math.round(Math.max(0, Math.min(mouse.screenW - 1, x)));
+  const iy = Math.round(Math.max(0, Math.min(mouse.screenH - 1, y)));
+  if (ix === mouse.lastSentX && iy === mouse.lastSentY) return;
+  mouse.lastSentX = ix; mouse.lastSentY = iy;
+  try { mouse.proc.stdin.write(ix + "," + iy + "\n"); } catch (_) {}
+}
+
+// Convert normalized gaze [-1, +1] into screen coordinates using
+// sensitivity/deadzone/smoothing from settings.gaze.
+function applyGazeToCursor(gazeX, gazeY) {
+  const g = settings.gaze;
+  if (!g || !g.enabled) {
+    mouse.hasSmooth = false;
+    return;
+  }
+  if (!Number.isFinite(gazeX) || !Number.isFinite(gazeY)) return;
+  // Deadzone in normalized space.
+  const dz = Number.isFinite(g.deadzone) ? g.deadzone : 0;
+  let nx = Math.abs(gazeX) < dz ? 0 : (gazeX - Math.sign(gazeX) * dz) / (1 - dz);
+  let ny = Math.abs(gazeY) < dz ? 0 : (gazeY - Math.sign(gazeY) * dz) / (1 - dz);
+  nx *= (Number.isFinite(g.sensitivityX) ? g.sensitivityX : 1);
+  ny *= (Number.isFinite(g.sensitivityY) ? g.sensitivityY : 1);
+  // Clamp post-sensitivity so we don't push the cursor off-screen.
+  nx = Math.max(-1, Math.min(1, nx));
+  ny = Math.max(-1, Math.min(1, ny));
+  // EMA smoothing.
+  const alpha = 1 - Math.max(0, Math.min(0.99, Number.isFinite(g.smoothing) ? g.smoothing : 0));
+  if (!mouse.hasSmooth) { mouse.smoothedX = nx; mouse.smoothedY = ny; mouse.hasSmooth = true; }
+  else {
+    mouse.smoothedX = alpha * nx + (1 - alpha) * mouse.smoothedX;
+    mouse.smoothedY = alpha * ny + (1 - alpha) * mouse.smoothedY;
+  }
+  const cx = (mouse.smoothedX + 1) * 0.5 * mouse.screenW;
+  const cy = (mouse.smoothedY + 1) * 0.5 * mouse.screenH;
+  moveCursorTo(cx, cy);
+}
 
 const udp = dgram.createSocket("udp4");
 const udpBuf = Buffer.allocUnsafe(48);
@@ -98,6 +207,11 @@ function applyAxis(value, conf, scale) {
 }
 
 function sendPose(rawPose) {
+  // Drive the Windows cursor from the gaze axes if enabled. The gaze
+  // values from the phone are pre-normalized to [-1, +1] using the
+  // user's gaze calibration, so we just pass them through.
+  applyGazeToCursor(rawPose.gazeX || 0, rawPose.gazeY || 0);
+
   const out = {
     x:     applyAxis(rawPose.x || 0,     settings.x,     SCALE.x),
     y:     applyAxis(rawPose.y || 0,     settings.y,     SCALE.y),
@@ -155,20 +269,41 @@ let heartbeat = null;
 let lastPongAt = 0;
 let debugBuffer = null; // null = not recording, [] = recording in progress
 
+// Binary pose frame layout:
+//   0x01 + 6 float32 (legacy, 25 bytes) -> head pose only
+//   0x02 + 8 float32 (current, 33 bytes) -> head pose + gazeX + gazeY
 function decodeBinaryPose(buf) {
-  if (buf.length !== 25 || buf[0] !== 0x01) return null;
-  const pose = {
-    yaw:   buf.readFloatLE(1),
-    pitch: buf.readFloatLE(5),
-    roll:  buf.readFloatLE(9),
-    x:     buf.readFloatLE(13),
-    y:     buf.readFloatLE(17),
-    z:     buf.readFloatLE(21),
-  };
-  // Drop the packet outright if any component is not finite. Better to
-  // skip a frame than to ship NaN/Infinity to OpenTrack and freeze the
-  // in-game camera.
+  let pose;
+  if (buf.length === 33 && buf[0] === 0x02) {
+    pose = {
+      yaw:   buf.readFloatLE(1),
+      pitch: buf.readFloatLE(5),
+      roll:  buf.readFloatLE(9),
+      x:     buf.readFloatLE(13),
+      y:     buf.readFloatLE(17),
+      z:     buf.readFloatLE(21),
+      gazeX: buf.readFloatLE(25),
+      gazeY: buf.readFloatLE(29),
+    };
+  } else if (buf.length === 25 && buf[0] === 0x01) {
+    pose = {
+      yaw:   buf.readFloatLE(1),
+      pitch: buf.readFloatLE(5),
+      roll:  buf.readFloatLE(9),
+      x:     buf.readFloatLE(13),
+      y:     buf.readFloatLE(17),
+      z:     buf.readFloatLE(21),
+      gazeX: 0,
+      gazeY: 0,
+    };
+  } else {
+    return null;
+  }
+  // Drop the packet outright if any component is not finite.
   for (const k of AXES) if (!Number.isFinite(pose[k])) return null;
+  if (!Number.isFinite(pose.gazeX) || !Number.isFinite(pose.gazeY)) {
+    pose.gazeX = 0; pose.gazeY = 0;
+  }
   return pose;
 }
 
@@ -314,6 +449,7 @@ const tuner = http.createServer((req, res) => {
         const incoming = JSON.parse(body);
         const merged = defaultSettings();
         for (const a of AXES) if (incoming[a]) Object.assign(merged[a], incoming[a]);
+        if (incoming.gaze && typeof incoming.gaze === "object") Object.assign(merged.gaze, incoming.gaze);
         settings = merged;
         saveSettings(settings);
         broadcastTuner({ type: "settings", settings: settings });
@@ -392,10 +528,12 @@ tuner.listen(TUNER_PORT, "127.0.0.1", () => {
   console.log("[connector] tuner UI on http://localhost:" + TUNER_PORT);
 });
 
+startMouseDriver();
 connectRelay();
 
 process.on("SIGINT", () => {
   if (ws) ws.close();
+  if (mouse.proc) { try { mouse.proc.kill(); } catch (_) {} }
   udp.close();
   tuner.close();
   process.exit(0);

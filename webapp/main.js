@@ -35,7 +35,20 @@ let lastMatrix = null;
 
 const CIRC = 2 * Math.PI * 46;
 const CAL_KEY = "tracksmfs.calibration.v2";
+const GAZE_CAL_KEY = "tracksmfs.gazeCalibration.v1";
 const RAW_KEYS = ["yaw", "pitch", "roll", "x", "y", "z"];
+
+// MediaPipe FaceLandmarker iris landmarks (require refineLandmarks).
+const LM_LEFT_IRIS = 468;
+const LM_LEFT_EYE_INNER = 133;
+const LM_LEFT_EYE_OUTER = 33;
+const LM_LEFT_EYE_TOP = 159;
+const LM_LEFT_EYE_BOTTOM = 145;
+const LM_RIGHT_IRIS = 473;
+const LM_RIGHT_EYE_INNER = 362;
+const LM_RIGHT_EYE_OUTER = 263;
+const LM_RIGHT_EYE_TOP = 386;
+const LM_RIGHT_EYE_BOTTOM = 374;
 
 // La caméra arrière voit ton visage en symétrique horizontal → on inverse
 // le yaw et le X bruts pour rester cohérent avec la calibration et les axes.
@@ -98,6 +111,26 @@ function loadCalibration() {
     return sanitizeCalibration(p);
   } catch { return emptyCalibration(); }
 }
+
+// Gaze calibration: maps the user's raw iris-in-eye ratio to the
+// normalized [-1, +1] range expected downstream. We capture min/max
+// for each axis when the user looks at the four screen corners.
+function emptyGazeCalibration() {
+  return { x: { min: -0.15, max: 0.15 }, y: { min: -0.10, max: 0.10 } };
+}
+function loadGazeCalibration() {
+  try {
+    const raw = localStorage.getItem(GAZE_CAL_KEY);
+    if (!raw) return emptyGazeCalibration();
+    const p = JSON.parse(raw);
+    if (!p?.x || !p?.y || !isSaneValue(p.x.min) || !isSaneValue(p.x.max) ||
+        !isSaneValue(p.y.min) || !isSaneValue(p.y.max)) return emptyGazeCalibration();
+    return p;
+  } catch { return emptyGazeCalibration(); }
+}
+function saveGazeCalibration(c) {
+  try { localStorage.setItem(GAZE_CAL_KEY, JSON.stringify(c)); } catch {}
+}
 function saveCalibration(c) { try { localStorage.setItem(CAL_KEY, JSON.stringify(c)); } catch {} }
 
 const state = {
@@ -127,6 +160,10 @@ const state = {
   bypassCenter: null,
   debugRecording: false,
   debugRecordingEndAt: 0,
+  gazeEnabled: false,
+  gazeCalibration: loadGazeCalibration(),
+  lastGaze: { x: 0, y: 0 },
+  lastGazeRaw: { x: 0, y: 0 },
 };
 
 // Bypass mode: send angles in degrees / translations in cm without
@@ -210,11 +247,15 @@ function send(obj) {
   if (state.ws?.readyState === 1) state.ws.send(JSON.stringify(obj));
 }
 
-// Binary pose payload: 1 byte tag (0x01) + 6 little-endian float32.
-// Total 25 bytes vs ~120 in JSON.
-const POSE_BUF = new ArrayBuffer(25);
+// Binary pose payload:
+//   tag 0x02 (1 byte) + 8 little-endian float32 = 33 bytes
+//   floats are: yaw, pitch, roll, x, y, z, gazeX, gazeY
+// gazeX/gazeY are pre-normalized in [-1, +1] (or near it).
+// Legacy 0x01 / 25-byte format is no longer emitted by this build,
+// but the connector still accepts it for older devices on the relay.
+const POSE_BUF = new ArrayBuffer(33);
 const POSE_VIEW = new DataView(POSE_BUF);
-POSE_VIEW.setUint8(0, 0x01);
+POSE_VIEW.setUint8(0, 0x02);
 function sendPose(p) {
   if (state.ws?.readyState !== 1) return;
   POSE_VIEW.setFloat32(1,  p.yaw,   true);
@@ -223,6 +264,8 @@ function sendPose(p) {
   POSE_VIEW.setFloat32(13, p.x,     true);
   POSE_VIEW.setFloat32(17, p.y,     true);
   POSE_VIEW.setFloat32(21, p.z,     true);
+  POSE_VIEW.setFloat32(25, p.gazeX || 0, true);
+  POSE_VIEW.setFloat32(29, p.gazeY || 0, true);
   state.ws.send(POSE_BUF);
 }
 
@@ -280,6 +323,30 @@ function handleCommand(msg) {
       state.debugRecording = true;
       state.debugRecordingEndAt = performance.now() + Number(msg.duration ?? 5) * 1000;
       send({ type: "debugRecordingStart" });
+      return;
+    case "setGazeEnabled":
+      state.gazeEnabled = !!msg.enabled;
+      return;
+    case "resetGazeCalibration":
+      state.gazeCalibration = emptyGazeCalibration();
+      try { localStorage.removeItem(GAZE_CAL_KEY); } catch {}
+      return;
+    case "setGazeCalibration":
+      // PC-driven gaze calibration: the tuner samples raw gaze from
+      // phoneStatus while the user looks at each corner on the PC
+      // screen, then sends back the computed ranges.
+      if (msg.calibration && typeof msg.calibration === "object" &&
+          msg.calibration.x && msg.calibration.y &&
+          isSaneValue(msg.calibration.x.min) && isSaneValue(msg.calibration.x.max) &&
+          isSaneValue(msg.calibration.y.min) && isSaneValue(msg.calibration.y.max) &&
+          msg.calibration.x.min < msg.calibration.x.max &&
+          msg.calibration.y.min < msg.calibration.y.max) {
+        state.gazeCalibration = {
+          x: { min: msg.calibration.x.min, max: msg.calibration.x.max },
+          y: { min: msg.calibration.y.min, max: msg.calibration.y.max },
+        };
+        saveGazeCalibration(state.gazeCalibration);
+      }
       return;
     case "setCalibration":
       // Partial-merge the incoming calibration into the existing one.
@@ -525,6 +592,42 @@ function computePose(matrix, landmarks) {
   return raw;
 }
 
+// Estimate gaze direction from iris landmarks. Returns { x, y } where
+// each component is the iris offset from the eye center, divided by
+// half the eye width/height. ~0 means looking straight at the camera.
+// Averaging both eyes makes the signal much more stable than using
+// either alone, especially under noise.
+function computeGazeFromLandmarks(landmarks) {
+  if (!landmarks || landmarks.length <= LM_RIGHT_IRIS) return null;
+  const Lin = landmarks[LM_LEFT_EYE_INNER], Lout = landmarks[LM_LEFT_EYE_OUTER];
+  const Ltop = landmarks[LM_LEFT_EYE_TOP], Lbot = landmarks[LM_LEFT_EYE_BOTTOM];
+  const Liris = landmarks[LM_LEFT_IRIS];
+  const Rin = landmarks[LM_RIGHT_EYE_INNER], Rout = landmarks[LM_RIGHT_EYE_OUTER];
+  const Rtop = landmarks[LM_RIGHT_EYE_TOP], Rbot = landmarks[LM_RIGHT_EYE_BOTTOM];
+  const Riris = landmarks[LM_RIGHT_IRIS];
+  if (!Lin || !Lout || !Liris || !Rin || !Rout || !Riris) return null;
+
+  const eyeRatio = (iris, outer, inner, top, bot) => {
+    const cx = (outer.x + inner.x) * 0.5;
+    const cy = (top.y + bot.y) * 0.5;
+    const halfW = Math.max(1e-6, Math.abs(outer.x - inner.x) * 0.5);
+    const halfH = Math.max(1e-6, Math.abs(top.y - bot.y) * 0.5);
+    return {
+      x: (iris.x - cx) / halfW,
+      y: (iris.y - cy) / halfH,
+    };
+  };
+  const gl = eyeRatio(Liris, Lout, Lin, Ltop, Lbot);
+  const gr = eyeRatio(Riris, Rout, Rin, Rtop, Rbot);
+  // The rear camera mirrors the image, so the inner corner of the
+  // left eye in the user's reference is actually the right side of
+  // the picture. We sign-flip X to make "look right" = +X.
+  return {
+    x: -((gl.x + gr.x) * 0.5),
+    y:  ((gl.y + gr.y) * 0.5),
+  };
+}
+
 function mapAxis(value, range, target) {
   if (target === 0) return 0;
   if (!Number.isFinite(value) || !range) return 0;
@@ -596,7 +699,25 @@ const filters = {
   x: new OneEuro({ minCutoff: 1.5, beta: 0.05 }),
   y: new OneEuro({ minCutoff: 1.5, beta: 0.05 }),
   z: new OneEuro({ minCutoff: 1.5, beta: 0.05 }),
+  // Gaze is noisier (iris ~10 px) so we lowpass harder.
+  gazeX: new OneEuro({ minCutoff: 0.8, beta: 0.04 }),
+  gazeY: new OneEuro({ minCutoff: 0.8, beta: 0.04 }),
 };
+
+// Map a raw gaze ratio to the normalized [-1, +1] range using the
+// per-user calibration. Returns 0 if the calibration range is too
+// narrow (avoids amplifying noise).
+function mapGazeAxis(value, range) {
+  if (!range || !Number.isFinite(value)) return 0;
+  if (value >= 0) {
+    const span = range.max;
+    if (!Number.isFinite(span) || span <= 1e-4) return 0;
+    return Math.max(-1, Math.min(1, value / span));
+  }
+  const span = -range.min;
+  if (!Number.isFinite(span) || span <= 1e-4) return 0;
+  return Math.max(-1, Math.min(1, value / span));
+}
 function resetFilters() { for (const k of RAW_KEYS) { const f = filters[k]; f.x = null; f.dx = 0; f.t = null; } }
 
 // ----- Gizmo rendering ---------------------------------------------------
@@ -740,6 +861,10 @@ function maybeSendStatus(now) {
     bypass: state.bypass,
     gizmoEnabled: state.gizmoEnabled,
     calibration: state.calibration,
+    gazeEnabled: state.gazeEnabled,
+    gazeCalibration: state.gazeCalibration,
+    lastGaze: state.lastGaze,
+    lastGazeRaw: state.lastGazeRaw,
   };
   if (state.mode === "countdown") {
     const total = state.countdownTotalMs || 10000;
@@ -946,6 +1071,20 @@ function loop() {
         }
         if (out) {
           const t = now;
+          // Compute gaze (raw iris ratio) from the same frame's landmarks.
+          // Apply the per-user gaze calibration to normalize to [-1, +1],
+          // then filter. If gaze is unavailable, both axes default to 0.
+          const gazeRaw = computeGazeFromLandmarks(lastLandmarks);
+          let gazeXOut = 0, gazeYOut = 0;
+          if (gazeRaw) {
+            state.lastGazeRaw = gazeRaw;
+            const gc = state.gazeCalibration;
+            const nx = mapGazeAxis(gazeRaw.x, gc.x);
+            const ny = mapGazeAxis(gazeRaw.y, gc.y);
+            gazeXOut = filters.gazeX.filter(nx, t);
+            gazeYOut = filters.gazeY.filter(ny, t);
+            state.lastGaze = { x: gazeXOut, y: gazeYOut };
+          }
           const filtered = {
             yaw: filters.yaw.filter(out.yaw, t),
             pitch: filters.pitch.filter(out.pitch, t),
@@ -953,6 +1092,8 @@ function loop() {
             x: filters.x.filter(out.x, t),
             y: filters.y.filter(out.y, t),
             z: filters.z.filter(out.z, t),
+            gazeX: gazeXOut,
+            gazeY: gazeYOut,
           };
           sendPose(filtered);
         }

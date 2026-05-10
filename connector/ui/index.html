@@ -94,6 +94,29 @@
         <div id="calDiag" class="cal-diag muted">en attente du téléphone…</div>
       </section>
 
+      <section class="gaze">
+        <h2>Souris par regard (eye tracking)</h2>
+        <div class="gaze-row">
+          <label class="gaze-toggle">
+            <input id="gazeEnabled" type="checkbox" />
+            <span>Activer la souris pilotée par les yeux</span>
+          </label>
+          <button id="gazeCalibrate">Calibrer le regard</button>
+          <button id="gazeReset" class="ghost">Effacer calibration regard</button>
+        </div>
+        <div class="gaze-sliders">
+          <label>Sensibilité X <input id="gazeSensX" type="range" min="0.2" max="3" step="0.05" value="1" /> <span id="gazeSensXVal">1.00</span></label>
+          <label>Sensibilité Y <input id="gazeSensY" type="range" min="0.2" max="3" step="0.05" value="1" /> <span id="gazeSensYVal">1.00</span></label>
+          <label>Zone morte <input id="gazeDeadzone" type="range" min="0" max="0.3" step="0.01" value="0.05" /> <span id="gazeDeadzoneVal">0.05</span></label>
+          <label>Lissage <input id="gazeSmoothing" type="range" min="0" max="0.9" step="0.05" value="0.25" /> <span id="gazeSmoothingVal">0.25</span></label>
+        </div>
+        <div class="gaze-live">
+          <span class="muted">Regard temps réel :</span>
+          <span id="gazeLive">—</span>
+        </div>
+        <p class="muted small">Astuce : dans MSFS, assigne un bouton de ta manette à <b>"clic souris gauche"</b>. Tu regardes un bouton du cockpit, tu appuies sur le bouton manette, ça clique. La tête reste libre pour le head tracking.</p>
+      </section>
+
       <section class="hints">
         <h2>Conseils rapides</h2>
         <ul>
@@ -106,6 +129,21 @@
       </section>
     </section>
   </main>
+
+  <div id="gazeCalOverlay" class="gaze-cal-overlay hidden">
+    <div class="gaze-cal-dot tl"></div>
+    <div class="gaze-cal-dot tr"></div>
+    <div class="gaze-cal-dot br"></div>
+    <div class="gaze-cal-dot bl"></div>
+    <div class="gaze-cal-dot c"></div>
+    <div class="gaze-cal-box">
+      <div class="step">Calibration regard</div>
+      <div class="title" id="gazeCalTitle">Regarde le point qui clignote</div>
+      <div class="sub" id="gazeCalSub">Garde la tête immobile. Ne suis qu'avec les yeux.</div>
+      <div class="num" id="gazeCalNum">—</div>
+      <button id="gazeCalCancel" class="ghost">Annuler</button>
+    </div>
+  </div>
 
   <script src="./app.js"></script>
 </body>

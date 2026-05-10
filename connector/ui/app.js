@@ -41,6 +41,23 @@ const els = {
   calDiag: document.getElementById("calDiag"),
   debugRecord: document.getElementById("debugRecord"),
   debugStatus: document.getElementById("debugStatus"),
+  gazeEnabled: document.getElementById("gazeEnabled"),
+  gazeCalibrate: document.getElementById("gazeCalibrate"),
+  gazeReset: document.getElementById("gazeReset"),
+  gazeSensX: document.getElementById("gazeSensX"),
+  gazeSensY: document.getElementById("gazeSensY"),
+  gazeDeadzone: document.getElementById("gazeDeadzone"),
+  gazeSmoothing: document.getElementById("gazeSmoothing"),
+  gazeSensXVal: document.getElementById("gazeSensXVal"),
+  gazeSensYVal: document.getElementById("gazeSensYVal"),
+  gazeDeadzoneVal: document.getElementById("gazeDeadzoneVal"),
+  gazeSmoothingVal: document.getElementById("gazeSmoothingVal"),
+  gazeLive: document.getElementById("gazeLive"),
+  gazeCalOverlay: document.getElementById("gazeCalOverlay"),
+  gazeCalTitle: document.getElementById("gazeCalTitle"),
+  gazeCalSub: document.getElementById("gazeCalSub"),
+  gazeCalNum: document.getElementById("gazeCalNum"),
+  gazeCalCancel: document.getElementById("gazeCalCancel"),
 };
 
 const PO_CIRC = 2 * Math.PI * 46;
@@ -400,6 +417,7 @@ function connectWS() {
       if (msg.type === "settings") {
         state.settings = msg.settings;
         build();
+        syncGazeUI();
       } else if (msg.type === "live") {
         updateLive(msg);
       } else if (msg.type === "rtc") {
@@ -423,6 +441,21 @@ function connectWS() {
         if (msg.phone && typeof msg.phone.gizmoEnabled === "boolean" && msg.phone.gizmoEnabled !== gizmoOn) {
           gizmoOn = msg.phone.gizmoEnabled;
           setGizmoButtonLabel();
+        }
+        // Live gaze indicator + sample collection during gaze calibration.
+        if (msg.phone) {
+          const gr = msg.phone.lastGazeRaw;
+          const g = msg.phone.lastGaze;
+          if (g && Number.isFinite(g.x) && Number.isFinite(g.y)) {
+            els.gazeLive.textContent = `x=${g.x.toFixed(2)}  y=${g.y.toFixed(2)}  (raw x=${gr?.x?.toFixed?.(2) ?? "?"}  y=${gr?.y?.toFixed?.(2) ?? "?"})`;
+          }
+          if (gazeCal.running && gr && Number.isFinite(gr.x) && Number.isFinite(gr.y)) {
+            const step = GAZE_STEPS[gazeCal.idx];
+            // Drop the first 700 ms of each corner to let the eyes settle.
+            if (performance.now() - gazeCal.startedAt > 700) {
+              gazeCal.samples[step.axis].push(gr);
+            }
+          }
         }
       } else if (msg.type === "debug") {
         if (msg.phase === "start") {
@@ -507,9 +540,149 @@ els.debugRecord.addEventListener("click", () => {
   sendCommand({ type: "startDebugRecording", duration: 5 });
 });
 
+// ----- Gaze (eye tracking) ---------------------------------------------
+
+const GAZE_STEPS = [
+  { axis: "c",  title: "Regarde au CENTRE",       sub: "Garde la tête immobile. Suis avec les yeux uniquement." },
+  { axis: "tl", title: "Regarde en HAUT-GAUCHE",  sub: "Tourne juste les yeux vers le coin." },
+  { axis: "tr", title: "Regarde en HAUT-DROITE",  sub: "Tourne juste les yeux vers le coin." },
+  { axis: "br", title: "Regarde en BAS-DROITE",   sub: "Tourne juste les yeux vers le coin." },
+  { axis: "bl", title: "Regarde en BAS-GAUCHE",   sub: "Tourne juste les yeux vers le coin." },
+];
+const GAZE_STEP_MS = 2500;
+const gazeCal = { running: false, idx: 0, startedAt: 0, samples: null };
+
+function syncGazeUI() {
+  const g = state.settings?.gaze;
+  if (!g) return;
+  if (typeof g.enabled === "boolean" && els.gazeEnabled.checked !== g.enabled) els.gazeEnabled.checked = g.enabled;
+  if (Number.isFinite(g.sensitivityX) && document.activeElement !== els.gazeSensX) els.gazeSensX.value = g.sensitivityX;
+  if (Number.isFinite(g.sensitivityY) && document.activeElement !== els.gazeSensY) els.gazeSensY.value = g.sensitivityY;
+  if (Number.isFinite(g.deadzone)     && document.activeElement !== els.gazeDeadzone)  els.gazeDeadzone.value = g.deadzone;
+  if (Number.isFinite(g.smoothing)    && document.activeElement !== els.gazeSmoothing) els.gazeSmoothing.value = g.smoothing;
+  updateGazeSliderLabels();
+}
+
+function updateGazeSliderLabels() {
+  els.gazeSensXVal.textContent = parseFloat(els.gazeSensX.value).toFixed(2);
+  els.gazeSensYVal.textContent = parseFloat(els.gazeSensY.value).toFixed(2);
+  els.gazeDeadzoneVal.textContent = parseFloat(els.gazeDeadzone.value).toFixed(2);
+  els.gazeSmoothingVal.textContent = parseFloat(els.gazeSmoothing.value).toFixed(2);
+}
+
+function pushGazeSettings() {
+  if (!state.settings) return;
+  state.settings.gaze = state.settings.gaze || {};
+  state.settings.gaze.enabled = els.gazeEnabled.checked;
+  state.settings.gaze.sensitivityX = parseFloat(els.gazeSensX.value);
+  state.settings.gaze.sensitivityY = parseFloat(els.gazeSensY.value);
+  state.settings.gaze.deadzone = parseFloat(els.gazeDeadzone.value);
+  state.settings.gaze.smoothing = parseFloat(els.gazeSmoothing.value);
+  pushSettings();
+  updateGazeSliderLabels();
+}
+
+[els.gazeSensX, els.gazeSensY, els.gazeDeadzone, els.gazeSmoothing].forEach((el) => {
+  el.addEventListener("input", pushGazeSettings);
+});
+els.gazeEnabled.addEventListener("change", pushGazeSettings);
+
+els.gazeReset.addEventListener("click", () => {
+  if (!confirm("Effacer la calibration regard ?")) return;
+  sendCommand({ type: "resetGazeCalibration" });
+});
+
+function highlightGazeDot(axis) {
+  const overlay = els.gazeCalOverlay;
+  overlay.querySelectorAll(".gaze-cal-dot").forEach((d) => d.classList.remove("active"));
+  if (axis) {
+    const sel = overlay.querySelector(".gaze-cal-dot." + axis);
+    if (sel) sel.classList.add("active");
+    overlay.classList.toggle("active-c", axis === "c");
+  }
+}
+
+function startGazeCalibration() {
+  if (gazeCal.running) return;
+  if (!state.phoneConnected) {
+    alert("Le téléphone doit être connecté pour calibrer le regard.");
+    return;
+  }
+  gazeCal.running = true;
+  gazeCal.idx = 0;
+  gazeCal.startedAt = performance.now();
+  gazeCal.samples = { c: [], tl: [], tr: [], br: [], bl: [] };
+  els.gazeCalOverlay.classList.remove("hidden");
+  const step = GAZE_STEPS[0];
+  els.gazeCalTitle.textContent = step.title;
+  els.gazeCalSub.textContent = step.sub;
+  els.gazeCalNum.textContent = Math.ceil(GAZE_STEP_MS / 1000);
+  highlightGazeDot(step.axis);
+  requestAnimationFrame(gazeCalibrationLoop);
+}
+
+function gazeCalibrationLoop() {
+  if (!gazeCal.running) return;
+  const now = performance.now();
+  const elapsed = now - gazeCal.startedAt;
+  const step = GAZE_STEPS[gazeCal.idx];
+  els.gazeCalNum.textContent = Math.max(0, Math.ceil((GAZE_STEP_MS - elapsed) / 1000));
+  if (elapsed >= GAZE_STEP_MS) {
+    if (gazeCal.idx + 1 >= GAZE_STEPS.length) {
+      finalizeGazeCalibration();
+      return;
+    }
+    gazeCal.idx++;
+    gazeCal.startedAt = now;
+    const next = GAZE_STEPS[gazeCal.idx];
+    els.gazeCalTitle.textContent = next.title;
+    els.gazeCalSub.textContent = next.sub;
+    highlightGazeDot(next.axis);
+  }
+  requestAnimationFrame(gazeCalibrationLoop);
+}
+
+function gazeCalibrationCancel() {
+  gazeCal.running = false;
+  els.gazeCalOverlay.classList.add("hidden");
+  highlightGazeDot(null);
+}
+
+function finalizeGazeCalibration() {
+  const s = gazeCal.samples;
+  gazeCal.running = false;
+  els.gazeCalOverlay.classList.add("hidden");
+  highlightGazeDot(null);
+  // For each corner, compute the median of the raw gaze samples (more
+  // robust than the mean to a few blinks or stray frames). Then derive
+  // the range as the extreme of the four corners.
+  const med = (arr, k) => {
+    const v = arr.map((p) => p[k]).filter(Number.isFinite).sort((a, b) => a - b);
+    return v.length ? v[v.length >> 1] : 0;
+  };
+  const xs = [med(s.tl, "x"), med(s.tr, "x"), med(s.br, "x"), med(s.bl, "x")];
+  const ys = [med(s.tl, "y"), med(s.tr, "y"), med(s.br, "y"), med(s.bl, "y")];
+  const calibration = {
+    x: { min: Math.min(...xs), max: Math.max(...xs) },
+    y: { min: Math.min(...ys), max: Math.max(...ys) },
+  };
+  if (!isFinite(calibration.x.min) || !isFinite(calibration.x.max) ||
+      calibration.x.min >= calibration.x.max || calibration.y.min >= calibration.y.max) {
+    alert("Calibration regard impossible : pas assez de données valides. Réessaie.");
+    return;
+  }
+  sendCommand({ type: "setGazeCalibration", calibration });
+}
+
+els.gazeCalibrate.addEventListener("click", startGazeCalibration);
+els.gazeCalCancel.addEventListener("click", gazeCalibrationCancel);
+
+updateGazeSliderLabels();
+
 (async () => {
   const r = await fetch("/api/settings");
   state.settings = await r.json();
   build();
+  syncGazeUI();
   connectWS();
 })();
