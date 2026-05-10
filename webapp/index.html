@@ -20,6 +20,20 @@
     button { font: inherit; font-weight: 600; padding: 12px 18px; border-radius: 12px; border: 1px solid #ffffff24; background: #1b1f25; color: inherit; }
     button.primary { background: #2563eb; border-color: #2563eb; }
     #stats { position: fixed; right: 10px; bottom: 70px; font-variant-numeric: tabular-nums; font-size: 11px; opacity: 0.75; text-align: right; }
+
+    #cal { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 24px; padding: 24px; text-align: center; background: #0b0d10e6; backdrop-filter: blur(8px); z-index: 10; }
+    #cal.show { display: flex; }
+    #cal .title { font-size: 28px; font-weight: 800; line-height: 1.15; max-width: 90vw; }
+    #cal .sub { font-size: 15px; opacity: 0.75; max-width: 80vw; }
+    #cal .ring { width: 180px; height: 180px; border-radius: 50%; display: grid; place-items: center; position: relative; }
+    #cal .ring svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+    #cal .ring .num { font-size: 64px; font-weight: 800; font-variant-numeric: tabular-nums; }
+    #cal .ring circle { fill: none; stroke-width: 8; }
+    #cal .ring .bg { stroke: #ffffff1a; }
+    #cal .ring .fg { stroke: #2563eb; stroke-linecap: round; transition: stroke-dashoffset 80ms linear; }
+    #cal .step { font-size: 13px; opacity: 0.6; letter-spacing: 0.08em; text-transform: uppercase; }
+    #cal .actions { display: flex; gap: 10px; }
+    #cal .arrow { font-size: 80px; opacity: 0.85; line-height: 1; }
   </style>
 </head>
 <body>
@@ -39,8 +53,27 @@
 
   <div id="ctrl">
     <button id="start" class="primary">Start</button>
+    <button id="calibrate">Calibrate</button>
     <button id="recenter">Re-center</button>
     <button id="flip">Flip cam</button>
+  </div>
+
+  <div id="cal">
+    <div class="step" id="cal-step">Step 1 / 9</div>
+    <div class="arrow" id="cal-arrow">·</div>
+    <div class="title" id="cal-title">Look straight ahead</div>
+    <div class="sub" id="cal-sub">Stay still and centered.</div>
+    <div class="ring">
+      <svg viewBox="0 0 100 100">
+        <circle class="bg" cx="50" cy="50" r="46" />
+        <circle class="fg" id="cal-ring" cx="50" cy="50" r="46" stroke-dasharray="289" stroke-dashoffset="289" />
+      </svg>
+      <div class="num" id="cal-num">5</div>
+    </div>
+    <div class="actions">
+      <button id="cal-skip">Skip</button>
+      <button id="cal-cancel">Cancel</button>
+    </div>
   </div>
 
   <script type="module" src="./main.js"></script>

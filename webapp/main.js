@@ -11,18 +11,62 @@ const els = {
   start: document.getElementById("start"),
   recenter: document.getElementById("recenter"),
   flip: document.getElementById("flip"),
+  calibrate: document.getElementById("calibrate"),
+  cal: document.getElementById("cal"),
+  calStep: document.getElementById("cal-step"),
+  calArrow: document.getElementById("cal-arrow"),
+  calTitle: document.getElementById("cal-title"),
+  calSub: document.getElementById("cal-sub"),
+  calNum: document.getElementById("cal-num"),
+  calRing: document.getElementById("cal-ring"),
+  calSkip: document.getElementById("cal-skip"),
+  calCancel: document.getElementById("cal-cancel"),
 };
+
+// Target output ranges sent to OpenTrack (degrees / centimeters).
+const TARGET = {
+  yaw: 90, pitch: 60, roll: 0,
+  x: 15, y: 0, z: 15,
+};
+
+const CAL_STORAGE_KEY = "tracksmfs.calibration.v1";
+const RAW_KEYS = ["yaw", "pitch", "roll", "x", "y", "z"];
+
+function emptyCalibration() {
+  const ranges = {};
+  for (const k of RAW_KEYS) ranges[k] = { min: 0, max: 0 };
+  return { center: null, ranges };
+}
+
+function loadCalibration() {
+  try {
+    const raw = localStorage.getItem(CAL_STORAGE_KEY);
+    if (!raw) return emptyCalibration();
+    const parsed = JSON.parse(raw);
+    if (!parsed?.center || !parsed?.ranges) return emptyCalibration();
+    return parsed;
+  } catch {
+    return emptyCalibration();
+  }
+}
+
+function saveCalibration(cal) {
+  try { localStorage.setItem(CAL_STORAGE_KEY, JSON.stringify(cal)); } catch {}
+}
 
 const state = {
   ws: null,
   landmarker: null,
   running: false,
-  center: null,
   lastSendAt: 0,
   frames: 0,
   fpsAt: performance.now(),
   facingMode: "user",
   wakeLock: null,
+  calibration: loadCalibration(),
+  calRunning: false,
+  calCancelRequested: false,
+  lastRaw: null,
 };
 
 function setPill(el, text, cls) {
@@ -140,8 +184,15 @@ const filters = {
   z: new OneEuro({ minCutoff: 1.5, beta: 0.05 }),
 };
 
-// Sensitivity: rad → degrees (OpenTrack expects degrees) and translation scaling.
-const SENS = { yaw: 2.0, pitch: 2.0, roll: 1.0, x: 100, y: 100, z: 100 };
+// Fallback ranges in raw units, used before calibration is run.
+const FALLBACK = {
+  yaw: { min: -0.5, max: 0.5 },     // ~28°
+  pitch: { min: -0.4, max: 0.4 },   // ~23°
+  roll: { min: -0.4, max: 0.4 },
+  x: { min: -3, max: 3 },           // model space cm
+  y: { min: -3, max: 3 },
+  z: { min: -5, max: 5 },
+};
 
 function computePose(matrix) {
   const { yaw, pitch, roll } = eulerFromMatrix(matrix);
@@ -150,16 +201,34 @@ function computePose(matrix) {
   return { yaw, pitch, roll, x: tx, y: ty, z: tz };
 }
 
+// Map a centered raw value to the target output range using each side
+// of the user's calibrated movement independently.
+function mapAxis(value, range, target) {
+  if (target === 0) return 0;
+  if (value >= 0) {
+    const span = Math.max(1e-6, range.max);
+    return Math.max(-target, Math.min(target, (value / span) * target));
+  } else {
+    const span = Math.max(1e-6, -range.min);
+    return Math.max(-target, Math.min(target, (value / span) * target));
+  }
+}
+
 function applyCenterAndScale(pose) {
-  const c = state.center;
+  const c = state.calibration?.center;
   if (!c) return null;
-  const yaw = (pose.yaw - c.yaw) * (180 / Math.PI) * SENS.yaw;
-  const pitch = (pose.pitch - c.pitch) * (180 / Math.PI) * SENS.pitch;
-  const roll = (pose.roll - c.roll) * (180 / Math.PI) * SENS.roll;
-  const x = (pose.x - c.x) * SENS.x;
-  const y = (pose.y - c.y) * SENS.y;
-  const z = (pose.z - c.z) * SENS.z;
-  return { yaw, pitch, roll, x, y, z };
+  const ranges = state.calibration.ranges;
+  // Subtract center first, then map per-axis using calibrated min/max.
+  const centered = {};
+  for (const k of RAW_KEYS) centered[k] = pose[k] - c[k];
+  return {
+    yaw: mapAxis(centered.yaw, ranges.yaw, TARGET.yaw),
+    pitch: mapAxis(centered.pitch, ranges.pitch, TARGET.pitch),
+    roll: mapAxis(centered.roll, ranges.roll, TARGET.roll),
+    x: mapAxis(centered.x, ranges.x, TARGET.x),
+    y: mapAxis(centered.y, ranges.y, TARGET.y),
+    z: mapAxis(centered.z, ranges.z, TARGET.z),
+  };
 }
 
 async function loop() {
@@ -170,8 +239,14 @@ async function loop() {
   if (matrices && matrices.length > 0) {
     const m = matrices[0].data;
     const raw = computePose(m);
-    if (!state.center) state.center = { ...raw };
-    const out = applyCenterAndScale(raw);
+    state.lastRaw = raw;
+    // First-run bootstrap: if no calibration, seed center + fallback ranges
+    // so tracking still works while the user has not run the wizard yet.
+    if (!state.calibration.center) {
+      state.calibration.center = { ...raw };
+      state.calibration.ranges = JSON.parse(JSON.stringify(FALLBACK));
+    }
+    const out = state.calRunning ? null : applyCenterAndScale(raw);
     if (out) {
       const t = performance.now();
       const filtered = {
@@ -215,11 +290,16 @@ els.start.addEventListener("click", async () => {
   }
 });
 
-els.recenter.addEventListener("click", () => { state.center = null; });
+els.recenter.addEventListener("click", () => {
+  if (state.lastRaw) {
+    state.calibration.center = { ...state.lastRaw };
+    saveCalibration(state.calibration);
+  }
+});
 
 els.flip.addEventListener("click", async () => {
   state.facingMode = state.facingMode === "user" ? "environment" : "user";
-  state.center = null;
+  state.calibration.center = null;
   if (state.running) {
     try { await initCamera(); }
     catch (e) {
@@ -228,3 +308,134 @@ els.flip.addEventListener("click", async () => {
     }
   }
 });
+
+// ----- Calibration wizard -----------------------------------------------
+
+const STEPS = [
+  { axis: null,    sign: 0,  arrow: "·",  title: "Look straight ahead",        sub: "Stay centered and still.",                  duration: 3000 },
+  { axis: "yaw",   sign: -1, arrow: "←",  title: "Turn head fully left",       sub: "Eyes follow. Don't move shoulders.",         duration: 5000 },
+  { axis: "yaw",   sign: +1, arrow: "→",  title: "Turn head fully right",      sub: "Eyes follow. Don't move shoulders.",         duration: 5000 },
+  { axis: "pitch", sign: +1, arrow: "↑",  title: "Look up",                    sub: "Tilt your head up as far as comfortable.",   duration: 5000 },
+  { axis: "pitch", sign: -1, arrow: "↓",  title: "Look down",                  sub: "Tilt your head down as far as comfortable.", duration: 5000 },
+  { axis: "x",     sign: -1, arrow: "↤",  title: "Lean head to the left",      sub: "Translate (slide) head left, not tilt.",     duration: 5000 },
+  { axis: "x",     sign: +1, arrow: "↦",  title: "Lean head to the right",     sub: "Translate (slide) head right, not tilt.",    duration: 5000 },
+  { axis: "z",     sign: +1, arrow: "⊕",  title: "Move head closer",           sub: "Lean toward the camera.",                    duration: 5000 },
+  { axis: "z",     sign: -1, arrow: "⊖",  title: "Move head back",             sub: "Lean away from the camera.",                 duration: 5000 },
+];
+
+const CIRCUMFERENCE = 2 * Math.PI * 46;
+
+function showCalUI(step, idx) {
+  els.cal.classList.add("show");
+  els.calStep.textContent = `Step ${idx + 1} / ${STEPS.length}`;
+  els.calArrow.textContent = step.arrow;
+  els.calTitle.textContent = step.title;
+  els.calSub.textContent = step.sub;
+}
+
+function setCalProgress(elapsed, duration) {
+  const remaining = Math.max(0, duration - elapsed) / 1000;
+  els.calNum.textContent = Math.ceil(remaining).toString();
+  const ratio = Math.min(1, elapsed / duration);
+  els.calRing.style.strokeDashoffset = String(CIRCUMFERENCE * (1 - ratio));
+}
+
+function hideCalUI() {
+  els.cal.classList.remove("show");
+}
+
+async function waitFreshFrame() {
+  // Poll until detectForVideo has produced a fresh raw pose this session.
+  const t0 = performance.now();
+  while (!state.lastRaw && performance.now() - t0 < 3000) {
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+}
+
+async function runCalibrationStep(step, idx) {
+  showCalUI(step, idx);
+  const start = performance.now();
+  let peak = 0;     // signed peak magnitude on the chosen side
+  const centerSnapshot = state.calibration.center
+    ? { ...state.calibration.center }
+    : (state.lastRaw ? { ...state.lastRaw } : null);
+  // Average buffer for the centering step.
+  const centerBuf = { yaw: 0, pitch: 0, roll: 0, x: 0, y: 0, z: 0 };
+  let centerCount = 0;
+
+  return new Promise((resolve) => {
+    function tick() {
+      if (state.calCancelRequested) return resolve({ cancelled: true });
+      const elapsed = performance.now() - start;
+      setCalProgress(elapsed, step.duration);
+
+      const raw = state.lastRaw;
+      if (raw) {
+        if (step.axis === null) {
+          for (const k of RAW_KEYS) centerBuf[k] += raw[k];
+          centerCount++;
+        } else if (centerSnapshot) {
+          const v = raw[step.axis] - centerSnapshot[step.axis];
+          if (step.sign > 0 && v > peak) peak = v;
+          if (step.sign < 0 && v < peak) peak = v;
+        }
+      }
+
+      const finished = elapsed >= step.duration || state._skipStep;
+      if (finished) {
+        state._skipStep = false;
+        if (step.axis === null && centerCount > 0) {
+          const avg = {};
+          for (const k of RAW_KEYS) avg[k] = centerBuf[k] / centerCount;
+          state.calibration.center = avg;
+        } else if (step.axis && peak !== 0) {
+          const range = state.calibration.ranges[step.axis];
+          if (step.sign > 0) range.max = peak;
+          else range.min = peak;
+        }
+        return resolve({ cancelled: false, skipped: false });
+      }
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  });
+}
+
+async function runCalibration() {
+  if (state.calRunning) return;
+  if (!state.running) {
+    alert("Press Start first to enable the camera.");
+    return;
+  }
+  state.calRunning = true;
+  state.calCancelRequested = false;
+  const fresh = emptyCalibration();
+  fresh.ranges = JSON.parse(JSON.stringify(FALLBACK));
+  state.calibration = fresh;
+
+  await waitFreshFrame();
+
+  for (let i = 0; i < STEPS.length; i++) {
+    const r = await runCalibrationStep(STEPS[i], i);
+    if (r.cancelled) {
+      state.calRunning = false;
+      hideCalUI();
+      state.calibration = loadCalibration();
+      return;
+    }
+  }
+
+  // Sanity: if a side was not captured (peak still 0), fall back to FALLBACK.
+  for (const k of RAW_KEYS) {
+    const r = state.calibration.ranges[k];
+    if (r.min === 0) r.min = FALLBACK[k].min;
+    if (r.max === 0) r.max = FALLBACK[k].max;
+  }
+  saveCalibration(state.calibration);
+  state.calRunning = false;
+  hideCalUI();
+}
+
+els.calibrate.addEventListener("click", runCalibration);
+els.calCancel.addEventListener("click", () => { state.calCancelRequested = true; });
+els.calSkip.addEventListener("click", () => { state._skipStep = true; });
