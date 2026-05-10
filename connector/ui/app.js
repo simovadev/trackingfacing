@@ -65,21 +65,21 @@ function buildRow(axis) {
   row.dataset.axis = axis.key;
   row.innerHTML = `
     <div class="name">${axis.label}<small>${axis.sub}</small></div>
-    <div class="cell-ctl"><input type="checkbox" data-field="enabled"></div>
-    <div class="cell-ctl"><input type="checkbox" data-field="invert"></div>
-    <div class="cell-ctl">
+    <div class="cell-ctl" data-label="Activé"><input type="checkbox" data-field="enabled"></div>
+    <div class="cell-ctl" data-label="Inverser"><input type="checkbox" data-field="invert"></div>
+    <div class="cell-ctl" data-label="Gain">
       <input type="range" data-field="gain" min="0" max="${axis.gainMax}" step="0.05" />
       <input type="number" data-field="gain" min="0" max="20" step="0.05" />
     </div>
-    <div class="cell-ctl">
+    <div class="cell-ctl" data-label="Expo">
       <input type="range" data-field="expo" min="0.5" max="3" step="0.05" />
       <input type="number" data-field="expo" min="0.5" max="5" step="0.05" />
     </div>
-    <div class="cell-ctl">
+    <div class="cell-ctl" data-label="Offset">
       <input type="range" data-field="offset" min="-30" max="30" step="0.1" />
       <input type="number" data-field="offset" min="-180" max="180" step="0.1" />
     </div>
-    <div class="cell-ctl">
+    <div class="cell-ctl" data-label="Zone morte">
       <input type="range" data-field="deadzone" min="0" max="5" step="0.05" />
       <input type="number" data-field="deadzone" min="0" max="30" step="0.05" />
     </div>
