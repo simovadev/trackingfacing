@@ -589,23 +589,51 @@ function drawGizmo(ctx, sourceWidth, sourceHeight, targetWidth, targetHeight) {
 }
 
 // Render a frame to the broadcast canvas: video + (optional) gizmo.
+// iOS Safari reports the rear camera in landscape regardless of the
+// phone's physical orientation, so we rotate the source 90 deg into
+// the canvas when the device is held in portrait. This way the PC
+// preview gets the actual portrait image the user sees.
 function renderBroadcastFrame() {
   const vw = els.video.videoWidth;
   const vh = els.video.videoHeight;
   if (!vw) return;
-  // Resize the broadcast canvas to match the video orientation, capped
-  // at 720 long edge to keep the WebRTC bitrate reasonable.
+  const portrait = window.matchMedia && window.matchMedia("(orientation: portrait)").matches;
   const target = 720;
-  let w, h;
-  if (vw >= vh) { w = target; h = Math.round(target * vh / vw); }
-  else          { h = target; w = Math.round(target * vw / vh); }
-  if (broadcastCanvas.width !== w || broadcastCanvas.height !== h) {
-    broadcastCanvas.width = w;
-    broadcastCanvas.height = h;
+  // Decide canvas dimensions based on the orientation we WANT to ship.
+  let cw, ch;
+  if (portrait) {
+    // Rotate the landscape source by -90deg into a portrait canvas.
+    ch = target;
+    cw = Math.round(target * vh / vw);
+  } else if (vw >= vh) {
+    cw = target; ch = Math.round(target * vh / vw);
+  } else {
+    ch = target; cw = Math.round(target * vw / vh);
   }
-  broadcastCtx.drawImage(els.video, 0, 0, w, h);
-  if (state.gizmoEnabled) {
-    drawGizmo(broadcastCtx, vw, vh, w, h);
+  if (broadcastCanvas.width !== cw || broadcastCanvas.height !== ch) {
+    broadcastCanvas.width = cw;
+    broadcastCanvas.height = ch;
+  }
+  if (portrait) {
+    broadcastCtx.save();
+    broadcastCtx.translate(cw / 2, ch / 2);
+    broadcastCtx.rotate(-Math.PI / 2);
+    // After rotation, the source is drawn as ch x cw in the canvas frame.
+    broadcastCtx.drawImage(els.video, -ch / 2, -cw / 2, ch, cw);
+    broadcastCtx.restore();
+    if (state.gizmoEnabled) {
+      // Draw gizmo into the same rotated frame so it lines up.
+      broadcastCtx.save();
+      broadcastCtx.translate(cw / 2, ch / 2);
+      broadcastCtx.rotate(-Math.PI / 2);
+      drawGizmo(broadcastCtx, vw, vh, ch, cw);
+      broadcastCtx.restore();
+    }
+  } else {
+    broadcastCtx.drawImage(els.video, 0, 0, cw, ch);
+    if (state.gizmoEnabled) {
+      drawGizmo(broadcastCtx, vw, vh, cw, ch);
+    }
   }
 }
 
