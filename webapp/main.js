@@ -11,6 +11,7 @@ const els = {
   start: document.getElementById("start"),
   recenter: document.getElementById("recenter"),
   flip: document.getElementById("flip"),
+  pauseResume: document.getElementById("pauseResume"),
   calibrate: document.getElementById("calibrate"),
   cal: document.getElementById("cal"),
   calStep: document.getElementById("cal-step"),
@@ -58,6 +59,8 @@ const state = {
   ws: null,
   landmarker: null,
   running: false,
+  paused: false,
+  suppressUntil: 0,
   lastSendAt: 0,
   frames: 0,
   fpsAt: performance.now(),
@@ -98,8 +101,24 @@ async function initCamera() {
   els.video.srcObject = stream;
   // Mirror only the front camera to keep movement intuitive.
   els.video.style.transform = state.facingMode === "user" ? "scaleX(-1)" : "scaleX(1)";
+  await new Promise((res) => {
+    if (els.video.readyState >= 2) return res();
+    els.video.addEventListener("loadeddata", res, { once: true });
+  });
   await els.video.play();
   setPill(els.cam, `cam: ${state.facingMode === "user" ? "front" : "rear"} ${els.video.videoWidth}x${els.video.videoHeight}`, "ok");
+}
+
+function resetFilters() {
+  for (const k of RAW_KEYS) {
+    const f = filters[k];
+    if (f) { f.x = null; f.dx = 0; f.t = null; }
+  }
+  state.lastRaw = null;
+}
+
+function suppressFor(ms) {
+  state.suppressUntil = performance.now() + ms;
 }
 
 async function acquireWakeLock() {
@@ -246,9 +265,11 @@ async function loop() {
       state.calibration.center = { ...raw };
       state.calibration.ranges = JSON.parse(JSON.stringify(FALLBACK));
     }
-    const out = state.calRunning ? null : applyCenterAndScale(raw);
+    const tNow = performance.now();
+    const sending = !state.calRunning && !state.paused && tNow >= state.suppressUntil;
+    const out = sending ? applyCenterAndScale(raw) : null;
     if (out) {
-      const t = performance.now();
+      const t = tNow;
       const filtered = {
         yaw: filters.yaw.filter(out.yaw, t),
         pitch: filters.pitch.filter(out.pitch, t),
@@ -294,19 +315,49 @@ els.recenter.addEventListener("click", () => {
   if (state.lastRaw) {
     state.calibration.center = { ...state.lastRaw };
     saveCalibration(state.calibration);
+    resetFilters();
+    state.suppressUntil = 0;
+  }
+});
+
+els.pauseResume.addEventListener("click", () => {
+  if (state.paused) {
+    state.paused = false;
+    state.suppressUntil = 0;
+    resetFilters();
+    if (state.lastRaw) {
+      state.calibration.center = { ...state.lastRaw };
+      saveCalibration(state.calibration);
+    }
+    els.pauseResume.textContent = "Pause";
+    setPill(els.cam, `cam: ${state.facingMode === "user" ? "front" : "rear"} ${els.video.videoWidth}x${els.video.videoHeight}`, "ok");
+  } else {
+    state.paused = true;
+    els.pauseResume.textContent = "Resume";
   }
 });
 
 els.flip.addEventListener("click", async () => {
-  state.facingMode = state.facingMode === "user" ? "environment" : "user";
-  state.calibration.center = null;
+  if (els.flip.disabled) return;
+  els.flip.disabled = true;
+  const previous = state.facingMode;
+  state.facingMode = previous === "user" ? "environment" : "user";
+  // Stop sending until the new stream is settled and the user has had
+  // time to reposition the phone.
+  suppressFor(60_000);
+  resetFilters();
   if (state.running) {
     try { await initCamera(); }
     catch (e) {
-      state.facingMode = state.facingMode === "user" ? "environment" : "user";
+      state.facingMode = previous;
       await initCamera();
     }
   }
+  // Drop the suppression window early once Resume / Re-center is pressed.
+  setPill(els.cam, `cam: position phone, then Resume`, "ok");
+  state.paused = true;
+  els.pauseResume.textContent = "Resume";
+  els.flip.disabled = false;
 });
 
 // ----- Calibration wizard -----------------------------------------------
