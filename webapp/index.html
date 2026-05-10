@@ -3,77 +3,73 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>tracksmfs</title>
+  <title>tracksmfs · capteur</title>
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; background: #0b0d10; color: #e7eaee; font-family: -apple-system, system-ui, sans-serif; }
+    html, body { margin: 0; height: 100%; background: #0b0d10; color: #e7eaee; font-family: -apple-system, system-ui, sans-serif; overflow: hidden; }
     #stage { position: fixed; inset: 0; display: grid; place-items: center; }
-    video, canvas { width: 100vw; height: 100vh; object-fit: cover; }
-    video { transform: scaleX(-1); }
-    canvas { position: fixed; inset: 0; pointer-events: none; }
-    #hud { position: fixed; top: env(safe-area-inset-top, 0); left: 0; right: 0; padding: 12px 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; background: linear-gradient(#0b0d10cc, transparent); }
-    #hud .pill { font-size: 12px; padding: 6px 10px; border-radius: 999px; background: #ffffff14; border: 1px solid #ffffff1f; }
-    #hud .pill.ok { background: #16a34a33; border-color: #16a34a66; }
-    #hud .pill.bad { background: #dc262633; border-color: #dc262666; }
-    #ctrl { position: fixed; bottom: env(safe-area-inset-bottom, 0); left: 0; right: 0; padding: 14px; display: flex; gap: 10px; justify-content: center; }
-    button { font: inherit; font-weight: 600; padding: 12px 18px; border-radius: 12px; border: 1px solid #ffffff24; background: #1b1f25; color: inherit; }
-    button.primary { background: #2563eb; border-color: #2563eb; }
-    #stats { position: fixed; right: 10px; bottom: 70px; font-variant-numeric: tabular-nums; font-size: 11px; opacity: 0.75; text-align: right; }
+    video { width: 100vw; height: 100vh; object-fit: cover; }
 
-    #cal { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 24px; padding: 24px; text-align: center; background: #0b0d10e6; backdrop-filter: blur(8px); z-index: 10; }
-    #cal.show { display: flex; }
-    #cal .title { font-size: 28px; font-weight: 800; line-height: 1.15; max-width: 90vw; }
-    #cal .sub { font-size: 15px; opacity: 0.75; max-width: 80vw; }
-    #cal .ring { width: 180px; height: 180px; border-radius: 50%; display: grid; place-items: center; position: relative; }
-    #cal .ring svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
-    #cal .ring .num { font-size: 64px; font-weight: 800; font-variant-numeric: tabular-nums; }
-    #cal .ring circle { fill: none; stroke-width: 8; }
-    #cal .ring .bg { stroke: #ffffff1a; }
-    #cal .ring .fg { stroke: #2563eb; stroke-linecap: round; transition: stroke-dashoffset 80ms linear; }
-    #cal .step { font-size: 13px; opacity: 0.6; letter-spacing: 0.08em; text-transform: uppercase; }
-    #cal .actions { display: flex; gap: 10px; }
-    #cal .arrow { font-size: 80px; opacity: 0.85; line-height: 1; }
+    /* Bandeau de statut en haut */
+    #hud { position: fixed; top: env(safe-area-inset-top, 0); left: 0; right: 0; padding: 12px 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; background: linear-gradient(#0b0d10cc, transparent); z-index: 2; }
+    .pill { font-size: 12px; padding: 6px 10px; border-radius: 999px; background: #ffffff14; border: 1px solid #ffffff1f; }
+    .pill.ok  { background: #16a34a33; border-color: #16a34a66; }
+    .pill.bad { background: #dc262633; border-color: #dc262666; }
+    .pill.warn { background: #f59e0b33; border-color: #f59e0b66; }
+
+    /* Permission caméra : bouton plein écran si on n'a pas encore l'autorisation */
+    #permission { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 22px; text-align: center; background: #0b0d10; z-index: 5; }
+    #permission.hidden { display: none; }
+    #permission h1 { margin: 0; font-size: 22px; }
+    #permission p { margin: 0; max-width: 80vw; opacity: 0.75; line-height: 1.45; }
+    #permission button { font: inherit; font-weight: 700; padding: 14px 22px; border-radius: 12px; border: 0; background: #2563eb; color: #fff; }
+
+    /* Overlay générique : compte à rebours, calibration, etc */
+    #overlay { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 20px; padding: 24px; text-align: center; background: #0b0d10e6; backdrop-filter: blur(8px); z-index: 4; }
+    #overlay.show { display: flex; }
+    #overlay .small { font-size: 13px; opacity: 0.6; letter-spacing: 0.08em; text-transform: uppercase; }
+    #overlay .big { font-size: 88px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+    #overlay .arrow { font-size: 100px; opacity: 0.85; line-height: 1; }
+    #overlay .title { font-size: 28px; font-weight: 800; max-width: 90vw; line-height: 1.2; }
+    #overlay .sub { font-size: 15px; opacity: 0.75; max-width: 80vw; }
+    .ring { width: 160px; height: 160px; position: relative; display: grid; place-items: center; }
+    .ring svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+    .ring circle { fill: none; stroke-width: 8; }
+    .ring .bg { stroke: #ffffff1a; }
+    .ring .fg { stroke: #2563eb; stroke-linecap: round; transition: stroke-dashoffset 80ms linear; }
   </style>
 </head>
 <body>
+  <div id="permission">
+    <h1>tracksmfs</h1>
+    <p>Cette page utilise la caméra arrière de l'iPhone pour transmettre tes mouvements de tête au PC. Tous les contrôles sont sur l'interface PC.</p>
+    <button id="grant">Autoriser la caméra</button>
+  </div>
+
   <div id="stage">
     <video id="video" autoplay playsinline muted></video>
-    <canvas id="overlay"></canvas>
   </div>
 
   <div id="hud">
-    <span class="pill" id="ws">ws : inactif</span>
+    <span class="pill" id="ws">ws : connexion…</span>
     <span class="pill" id="cam">caméra : inactive</span>
     <span class="pill" id="model">modèle : inactif</span>
-    <span class="pill" id="wake">veille : off</span>
+    <span class="pill" id="pc">pc : ?</span>
+    <span class="pill" id="state">en attente</span>
   </div>
 
-  <div id="stats"></div>
-
-  <div id="ctrl">
-    <button id="start" class="primary">Démarrer</button>
-    <button id="pauseResume">Pause</button>
-    <button id="calibrate">Calibrer</button>
-    <button id="recenter">Recentrer</button>
-    <button id="flip">Changer caméra</button>
-  </div>
-
-  <div id="cal">
-    <div class="step" id="cal-step">Étape 1 / 9</div>
-    <div class="arrow" id="cal-arrow">·</div>
-    <div class="title" id="cal-title">Regarde droit devant</div>
-    <div class="sub" id="cal-sub">Reste bien centré et immobile.</div>
+  <div id="overlay">
+    <div class="small" id="ovl-small">Préparation</div>
+    <div class="arrow" id="ovl-arrow" style="display:none">·</div>
+    <div class="title" id="ovl-title">—</div>
+    <div class="sub" id="ovl-sub"></div>
     <div class="ring">
       <svg viewBox="0 0 100 100">
         <circle class="bg" cx="50" cy="50" r="46" />
-        <circle class="fg" id="cal-ring" cx="50" cy="50" r="46" stroke-dasharray="289" stroke-dashoffset="289" />
+        <circle class="fg" id="ovl-ring" cx="50" cy="50" r="46" stroke-dasharray="289" stroke-dashoffset="0" />
       </svg>
-      <div class="num" id="cal-num">5</div>
-    </div>
-    <div class="actions">
-      <button id="cal-skip">Passer</button>
-      <button id="cal-cancel">Annuler</button>
+      <div class="big" id="ovl-num">—</div>
     </div>
   </div>
 

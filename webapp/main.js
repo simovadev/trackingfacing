@@ -2,74 +2,76 @@ import { FilesetResolver, FaceLandmarker } from "https://cdn.jsdelivr.net/npm/@m
 
 const els = {
   video: document.getElementById("video"),
-  overlay: document.getElementById("overlay"),
   ws: document.getElementById("ws"),
   cam: document.getElementById("cam"),
   model: document.getElementById("model"),
-  wake: document.getElementById("wake"),
-  stats: document.getElementById("stats"),
-  start: document.getElementById("start"),
-  recenter: document.getElementById("recenter"),
-  flip: document.getElementById("flip"),
-  pauseResume: document.getElementById("pauseResume"),
-  calibrate: document.getElementById("calibrate"),
-  cal: document.getElementById("cal"),
-  calStep: document.getElementById("cal-step"),
-  calArrow: document.getElementById("cal-arrow"),
-  calTitle: document.getElementById("cal-title"),
-  calSub: document.getElementById("cal-sub"),
-  calNum: document.getElementById("cal-num"),
-  calRing: document.getElementById("cal-ring"),
-  calSkip: document.getElementById("cal-skip"),
-  calCancel: document.getElementById("cal-cancel"),
+  pc: document.getElementById("pc"),
+  state: document.getElementById("state"),
+  permission: document.getElementById("permission"),
+  grant: document.getElementById("grant"),
+  overlay: document.getElementById("overlay"),
+  ovlSmall: document.getElementById("ovl-small"),
+  ovlArrow: document.getElementById("ovl-arrow"),
+  ovlTitle: document.getElementById("ovl-title"),
+  ovlSub: document.getElementById("ovl-sub"),
+  ovlNum: document.getElementById("ovl-num"),
+  ovlRing: document.getElementById("ovl-ring"),
 };
 
-// Target output ranges sent to OpenTrack (degrees / centimeters).
-const TARGET = {
-  yaw: 90, pitch: 60, roll: 0,
-  x: 15, y: 0, z: 15,
-};
-
-const CAL_STORAGE_KEY = "tracksmfs.calibration.v1";
+const CIRC = 2 * Math.PI * 46;
+const CAL_KEY = "tracksmfs.calibration.v2";
 const RAW_KEYS = ["yaw", "pitch", "roll", "x", "y", "z"];
+
+// La caméra arrière voit ton visage en symétrique horizontal → on inverse
+// le yaw et le X bruts pour rester cohérent avec la calibration et les axes.
+const REAR_CAMERA_FLIP = { yaw: -1, pitch: 1, roll: -1, x: -1, y: 1, z: 1 };
+
+const TARGET = { yaw: 90, pitch: 60, roll: 0, x: 15, y: 0, z: 15 };
+const FALLBACK = {
+  yaw:   { min: -0.5, max: 0.5 },
+  pitch: { min: -0.4, max: 0.4 },
+  roll:  { min: -0.4, max: 0.4 },
+  x: { min: -3, max: 3 },
+  y: { min: -3, max: 3 },
+  z: { min: -5, max: 5 },
+};
 
 function emptyCalibration() {
   const ranges = {};
-  for (const k of RAW_KEYS) ranges[k] = { min: 0, max: 0 };
+  for (const k of RAW_KEYS) ranges[k] = { ...FALLBACK[k] };
   return { center: null, ranges };
 }
 
 function loadCalibration() {
   try {
-    const raw = localStorage.getItem(CAL_STORAGE_KEY);
+    const raw = localStorage.getItem(CAL_KEY);
     if (!raw) return emptyCalibration();
-    const parsed = JSON.parse(raw);
-    if (!parsed?.center || !parsed?.ranges) return emptyCalibration();
-    return parsed;
-  } catch {
-    return emptyCalibration();
-  }
+    const p = JSON.parse(raw);
+    if (!p?.center || !p?.ranges) return emptyCalibration();
+    return p;
+  } catch { return emptyCalibration(); }
 }
-
-function saveCalibration(cal) {
-  try { localStorage.setItem(CAL_STORAGE_KEY, JSON.stringify(cal)); } catch {}
-}
+function saveCalibration(c) { try { localStorage.setItem(CAL_KEY, JSON.stringify(c)); } catch {} }
 
 const state = {
   ws: null,
   landmarker: null,
-  running: false,
-  paused: false,
-  suppressUntil: 0,
-  lastSendAt: 0,
-  frames: 0,
-  fpsAt: performance.now(),
-  facingMode: "user",
-  wakeLock: null,
+  cameraReady: false,
+  modelReady: false,
+  // mode: idle | countdown | active | paused | calibrating
+  mode: "idle",
+  pcConnected: false,
   calibration: loadCalibration(),
-  calRunning: false,
-  calCancelRequested: false,
   lastRaw: null,
+  wakeLock: null,
+  // calibration runtime
+  calStepIdx: 0,
+  calStepStart: 0,
+  calCenterBuf: { yaw: 0, pitch: 0, roll: 0, x: 0, y: 0, z: 0 },
+  calCenterCount: 0,
+  calPeak: 0,
+  // countdown
+  countdownEndAt: 0,
 };
 
 function setPill(el, text, cls) {
@@ -77,11 +79,42 @@ function setPill(el, text, cls) {
   el.className = "pill" + (cls ? " " + cls : "");
 }
 
+function setOverlay(opts = null) {
+  if (!opts) { els.overlay.classList.remove("show"); return; }
+  els.overlay.classList.add("show");
+  els.ovlSmall.textContent = opts.small ?? "";
+  els.ovlTitle.textContent = opts.title ?? "";
+  els.ovlSub.textContent = opts.sub ?? "";
+  if (opts.arrow) { els.ovlArrow.textContent = opts.arrow; els.ovlArrow.style.display = ""; }
+  else els.ovlArrow.style.display = "none";
+  if (opts.num != null) els.ovlNum.textContent = String(opts.num);
+  if (opts.ratio != null) els.ovlRing.style.strokeDashoffset = String(CIRC * (1 - Math.min(1, Math.max(0, opts.ratio))));
+}
+
+function setStatePill() {
+  const map = {
+    idle:        { text: "en attente",    cls: "" },
+    countdown:   { text: "démarrage…",    cls: "warn" },
+    active:      { text: "actif",         cls: "ok" },
+    paused:      { text: "en pause",      cls: "warn" },
+    calibrating: { text: "calibration",   cls: "warn" },
+  };
+  const m = map[state.mode] ?? map.idle;
+  setPill(els.state, m.text, m.cls);
+}
+
+// ----- WebSocket ---------------------------------------------------------
+
 function connectWS() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const url = `${proto}://${location.host}/sender`;
-  const ws = new WebSocket(url);
+  const ws = new WebSocket(`${proto}://${location.host}/sender`);
   ws.addEventListener("open", () => setPill(els.ws, "ws : connecté", "ok"));
+  ws.addEventListener("message", (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg && typeof msg === "object" && msg.type) handleCommand(msg);
+    } catch {}
+  });
   ws.addEventListener("close", () => {
     setPill(els.ws, "ws : déconnecté", "bad");
     setTimeout(connectWS, 1000);
@@ -90,53 +123,65 @@ function connectWS() {
   state.ws = ws;
 }
 
+function send(obj) {
+  if (state.ws?.readyState === 1) state.ws.send(JSON.stringify(obj));
+}
+
+function handleCommand(msg) {
+  switch (msg.type) {
+    case "senderState":
+      // (informational, sent by relay; ignore here)
+      return;
+    case "pcState":
+      state.pcConnected = !!msg.connected;
+      setPill(els.pc, state.pcConnected ? "pc : connecté" : "pc : absent", state.pcConnected ? "ok" : "bad");
+      return;
+    case "start":
+      startCountdown(Number(msg.delay ?? 10));
+      return;
+    case "pause":
+      if (state.mode === "active") { state.mode = "paused"; setStatePill(); }
+      return;
+    case "resume":
+      if (state.mode === "paused") { state.mode = "active"; setStatePill(); }
+      return;
+    case "stop":
+      state.mode = "idle";
+      setOverlay(null);
+      setStatePill();
+      return;
+    case "recenter":
+      if (state.lastRaw) {
+        state.calibration.center = { ...state.lastRaw };
+        saveCalibration(state.calibration);
+      }
+      return;
+    case "calibrate":
+      runCalibration();
+      return;
+  }
+}
+
+// ----- Camera + Model ----------------------------------------------------
+
 async function initCamera() {
   setPill(els.cam, "caméra : demande…");
-  const prev = els.video.srcObject;
-  if (prev) prev.getTracks().forEach((t) => t.stop());
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: false,
-    video: { facingMode: state.facingMode, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 60 } },
+    video: {
+      facingMode: { ideal: "environment" },
+      width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 60 },
+    },
   });
   els.video.srcObject = stream;
-  // Miroir uniquement pour la caméra avant pour que les mouvements soient intuitifs.
-  els.video.style.transform = state.facingMode === "user" ? "scaleX(-1)" : "scaleX(1)";
   await new Promise((res) => {
     if (els.video.readyState >= 2) return res();
     els.video.addEventListener("loadeddata", res, { once: true });
   });
   await els.video.play();
-  setPill(els.cam, `caméra : ${state.facingMode === "user" ? "avant" : "arrière"} ${els.video.videoWidth}×${els.video.videoHeight}`, "ok");
+  setPill(els.cam, `caméra : arrière ${els.video.videoWidth}×${els.video.videoHeight}`, "ok");
+  state.cameraReady = true;
 }
-
-function resetFilters() {
-  for (const k of RAW_KEYS) {
-    const f = filters[k];
-    if (f) { f.x = null; f.dx = 0; f.t = null; }
-  }
-  state.lastRaw = null;
-}
-
-function suppressFor(ms) {
-  state.suppressUntil = performance.now() + ms;
-}
-
-async function acquireWakeLock() {
-  if (!("wakeLock" in navigator)) { setPill(els.wake, "veille : indispo"); return; }
-  try {
-    state.wakeLock = await navigator.wakeLock.request("screen");
-    setPill(els.wake, "veille : empêchée", "ok");
-    state.wakeLock.addEventListener("release", () => setPill(els.wake, "veille : off"));
-  } catch (e) {
-    setPill(els.wake, "veille : refusée", "bad");
-  }
-}
-
-document.addEventListener("visibilitychange", async () => {
-  if (document.visibilityState === "visible" && state.running && !state.wakeLock) {
-    await acquireWakeLock();
-  }
-});
 
 async function initModel() {
   setPill(els.model, "modèle : chargement…");
@@ -154,357 +199,261 @@ async function initModel() {
     outputFacialTransformationMatrixes: true,
   });
   setPill(els.model, "modèle : prêt", "ok");
+  state.modelReady = true;
 }
 
-// Extract Tait-Bryan angles (yaw, pitch, roll) from MediaPipe's
-// column-major 4x4 facial transformation matrix.
-//
-// Layout (column-major, MediaPipe convention):
-//     | m0  m4  m8  m12 |   (column 0,  column 1,  column 2,  translation)
-//     | m1  m5  m9  m13 |
-//     | m2  m6  m10 m14 |
-//     | m3  m7  m11 m15 |
-// so element R[row][col] = m[col*4 + row].
-//
-// Decomposition order is YXZ (yaw around Y, then pitch around X, then
-// roll around Z) which matches the convention OpenTrack expects on its
-// freetrack/TrackIR output.
-function eulerFromMatrix(m) {
-  const r00 = m[0],  r10 = m[1],  r20 = m[2];
-  const r01 = m[4],  r11 = m[5],  r21 = m[6];
-  const r02 = m[8],  r12 = m[9],  r22 = m[10];
+async function acquireWakeLock() {
+  if (!("wakeLock" in navigator)) return;
+  try { state.wakeLock = await navigator.wakeLock.request("screen"); } catch {}
+}
 
-  // YXZ decomposition.
+document.addEventListener("visibilitychange", async () => {
+  if (document.visibilityState === "visible" && !state.wakeLock) await acquireWakeLock();
+});
+
+// ----- Pose extraction ---------------------------------------------------
+
+function eulerFromMatrix(m) {
+  const r10 = m[1];
+  const r02 = m[8];
+  const r12 = m[9];
+  const r22 = m[10];
+  const r11 = m[5];
+  const r00 = m[0];
+  const r20 = m[2];
   const pitch = Math.asin(Math.max(-1, Math.min(1, -r12)));
   let yaw, roll;
   if (Math.abs(r12) < 0.9999) {
     yaw  = Math.atan2(r02, r22);
     roll = Math.atan2(r10, r11);
   } else {
-    // Gimbal lock fallback.
-    yaw  = Math.atan2(-r20, r00);
+    yaw = Math.atan2(-r20, r00);
     roll = 0;
   }
   return { yaw, pitch, roll };
 }
 
-// One Euro Filter — smoothing without lag.
+function computePose(matrix) {
+  const e = eulerFromMatrix(matrix);
+  const tx = matrix[12], ty = matrix[13], tz = matrix[14];
+  const raw = { yaw: e.yaw, pitch: e.pitch, roll: e.roll, x: tx, y: ty, z: tz };
+  for (const k of RAW_KEYS) raw[k] *= REAR_CAMERA_FLIP[k];
+  return raw;
+}
+
+function mapAxis(value, range, target) {
+  if (target === 0) return 0;
+  if (value >= 0) {
+    const span = Math.max(1e-6, range.max);
+    return Math.max(-target, Math.min(target, (value / span) * target));
+  }
+  const span = Math.max(1e-6, -range.min);
+  return Math.max(-target, Math.min(target, (value / span) * target));
+}
+
+function applyCenterAndScale(pose) {
+  const c = state.calibration?.center;
+  if (!c) return null;
+  const r = state.calibration.ranges;
+  const ce = {};
+  for (const k of RAW_KEYS) ce[k] = pose[k] - c[k];
+  return {
+    yaw: mapAxis(ce.yaw, r.yaw, TARGET.yaw),
+    pitch: mapAxis(ce.pitch, r.pitch, TARGET.pitch),
+    roll: mapAxis(ce.roll, r.roll, TARGET.roll),
+    x: mapAxis(ce.x, r.x, TARGET.x),
+    y: mapAxis(ce.y, r.y, TARGET.y),
+    z: mapAxis(ce.z, r.z, TARGET.z),
+  };
+}
+
 class OneEuro {
   constructor({ minCutoff = 1.0, beta = 0.02, dCutoff = 1.0 } = {}) {
-    this.minCutoff = minCutoff;
-    this.beta = beta;
-    this.dCutoff = dCutoff;
-    this.x = null;
-    this.dx = 0;
-    this.t = null;
+    this.minCutoff = minCutoff; this.beta = beta; this.dCutoff = dCutoff;
+    this.x = null; this.dx = 0; this.t = null;
   }
-  alpha(cutoff, dt) {
-    const r = 2 * Math.PI * cutoff * dt;
-    return r / (r + 1);
-  }
-  filter(value, t) {
-    if (this.t == null) { this.t = t; this.x = value; return value; }
+  alpha(c, dt) { const r = 2 * Math.PI * c * dt; return r / (r + 1); }
+  filter(v, t) {
+    if (this.t == null) { this.t = t; this.x = v; return v; }
     const dt = Math.max(1e-3, (t - this.t) / 1000);
     this.t = t;
-    const dx = (value - this.x) / dt;
+    const dx = (v - this.x) / dt;
     const aD = this.alpha(this.dCutoff, dt);
     this.dx = aD * dx + (1 - aD) * this.dx;
-    const cutoff = this.minCutoff + this.beta * Math.abs(this.dx);
-    const a = this.alpha(cutoff, dt);
-    this.x = a * value + (1 - a) * this.x;
+    const a = this.alpha(this.minCutoff + this.beta * Math.abs(this.dx), dt);
+    this.x = a * v + (1 - a) * this.x;
     return this.x;
   }
 }
-
 const filters = {
   yaw: new OneEuro(), pitch: new OneEuro(), roll: new OneEuro(),
   x: new OneEuro({ minCutoff: 1.5, beta: 0.05 }),
   y: new OneEuro({ minCutoff: 1.5, beta: 0.05 }),
   z: new OneEuro({ minCutoff: 1.5, beta: 0.05 }),
 };
+function resetFilters() { for (const k of RAW_KEYS) { const f = filters[k]; f.x = null; f.dx = 0; f.t = null; } }
 
-// Fallback ranges in raw units, used before calibration is run.
-const FALLBACK = {
-  yaw: { min: -0.5, max: 0.5 },     // ~28°
-  pitch: { min: -0.4, max: 0.4 },   // ~23°
-  roll: { min: -0.4, max: 0.4 },
-  x: { min: -3, max: 3 },           // model space cm
-  y: { min: -3, max: 3 },
-  z: { min: -5, max: 5 },
-};
+// ----- Calibration wizard (driven by PC, displayed on phone) ------------
 
-function computePose(matrix) {
-  const { yaw, pitch, roll } = eulerFromMatrix(matrix);
-  // Translation is in column 3 of column-major 4x4: indices 12,13,14
-  const tx = matrix[12], ty = matrix[13], tz = matrix[14];
-  return { yaw, pitch, roll, x: tx, y: ty, z: tz };
+const STEPS = [
+  { axis: null,    sign: 0,  arrow: "·",  title: "Regarde droit devant",          sub: "Reste centré et immobile.",                    duration: 3000 },
+  { axis: "yaw",   sign: -1, arrow: "←",  title: "Tourne la tête à fond à gauche", sub: "Sans bouger les épaules.",                    duration: 5000 },
+  { axis: "yaw",   sign: +1, arrow: "→",  title: "Tourne la tête à fond à droite", sub: "Sans bouger les épaules.",                    duration: 5000 },
+  { axis: "pitch", sign: +1, arrow: "↑",  title: "Regarde en haut",                sub: "Lève la tête au max confortable.",            duration: 5000 },
+  { axis: "pitch", sign: -1, arrow: "↓",  title: "Regarde en bas",                 sub: "Baisse la tête au max confortable.",          duration: 5000 },
+  { axis: "x",     sign: -1, arrow: "↤",  title: "Glisse la tête à gauche",        sub: "Translation latérale, ne penche pas.",        duration: 5000 },
+  { axis: "x",     sign: +1, arrow: "↦",  title: "Glisse la tête à droite",        sub: "Translation latérale, ne penche pas.",        duration: 5000 },
+  { axis: "z",     sign: +1, arrow: "⊕",  title: "Approche la tête",               sub: "Avance vers la caméra.",                       duration: 5000 },
+  { axis: "z",     sign: -1, arrow: "⊖",  title: "Recule la tête",                 sub: "Recule par rapport à la caméra.",              duration: 5000 },
+];
+
+function startCountdown(seconds) {
+  if (!state.cameraReady || !state.modelReady) return;
+  state.mode = "countdown";
+  state.countdownEndAt = performance.now() + seconds * 1000;
+  setStatePill();
 }
 
-// Map a centered raw value to the target output range using each side
-// of the user's calibrated movement independently.
-function mapAxis(value, range, target) {
-  if (target === 0) return 0;
-  if (value >= 0) {
-    const span = Math.max(1e-6, range.max);
-    return Math.max(-target, Math.min(target, (value / span) * target));
+function startCalibrationStep(idx) {
+  state.calStepIdx = idx;
+  state.calStepStart = performance.now();
+  state.calPeak = 0;
+  state.calCenterCount = 0;
+  for (const k of RAW_KEYS) state.calCenterBuf[k] = 0;
+}
+
+function runCalibration() {
+  if (!state.cameraReady || !state.modelReady) return;
+  state.mode = "calibrating";
+  // reset calibration entirely
+  state.calibration = emptyCalibration();
+  startCalibrationStep(0);
+  setStatePill();
+}
+
+function onCalibrationFrameDone(idx) {
+  const step = STEPS[idx];
+  if (step.axis === null) {
+    if (state.calCenterCount > 0) {
+      const avg = {};
+      for (const k of RAW_KEYS) avg[k] = state.calCenterBuf[k] / state.calCenterCount;
+      state.calibration.center = avg;
+    }
+  } else if (state.calPeak !== 0) {
+    const r = state.calibration.ranges[step.axis];
+    if (step.sign > 0) r.max = state.calPeak;
+    else r.min = state.calPeak;
+  }
+  if (idx + 1 < STEPS.length) {
+    startCalibrationStep(idx + 1);
   } else {
-    const span = Math.max(1e-6, -range.min);
-    return Math.max(-target, Math.min(target, (value / span) * target));
+    saveCalibration(state.calibration);
+    state.mode = "active";
+    setOverlay(null);
+    setStatePill();
+    send({ type: "calibrationDone" });
   }
 }
 
-function applyCenterAndScale(pose) {
-  const c = state.calibration?.center;
-  if (!c) return null;
-  const ranges = state.calibration.ranges;
-  // Subtract center first, then map per-axis using calibrated min/max.
-  const centered = {};
-  for (const k of RAW_KEYS) centered[k] = pose[k] - c[k];
-  return {
-    yaw: mapAxis(centered.yaw, ranges.yaw, TARGET.yaw),
-    pitch: mapAxis(centered.pitch, ranges.pitch, TARGET.pitch),
-    roll: mapAxis(centered.roll, ranges.roll, TARGET.roll),
-    x: mapAxis(centered.x, ranges.x, TARGET.x),
-    y: mapAxis(centered.y, ranges.y, TARGET.y),
-    z: mapAxis(centered.z, ranges.z, TARGET.z),
-  };
-}
+// ----- Main loop ---------------------------------------------------------
 
-async function loop() {
-  if (!state.running) return;
-  const now = performance.now();
-  const result = state.landmarker.detectForVideo(els.video, now);
-  const matrices = result.facialTransformationMatrixes;
-  if (matrices && matrices.length > 0) {
-    const m = matrices[0].data;
-    const raw = computePose(m);
-    state.lastRaw = raw;
-    // First-run bootstrap: if no calibration, seed center + fallback ranges
-    // so tracking still works while the user has not run the wizard yet.
-    if (!state.calibration.center) {
-      state.calibration.center = { ...raw };
-      state.calibration.ranges = JSON.parse(JSON.stringify(FALLBACK));
-    }
-    const tNow = performance.now();
-    const sending = !state.calRunning && !state.paused && tNow >= state.suppressUntil;
-    const out = sending ? applyCenterAndScale(raw) : null;
-    if (out) {
-      const t = tNow;
-      const filtered = {
-        yaw: filters.yaw.filter(out.yaw, t),
-        pitch: filters.pitch.filter(out.pitch, t),
-        roll: filters.roll.filter(out.roll, t),
-        x: filters.x.filter(out.x, t),
-        y: filters.y.filter(out.y, t),
-        z: filters.z.filter(out.z, t),
-      };
-      if (state.ws?.readyState === 1) state.ws.send(JSON.stringify(filtered));
-      if (t - state.lastSendAt > 100) {
-        state.lastSendAt = t;
-        els.stats.textContent =
-          `yaw ${filtered.yaw.toFixed(1)}°  pitch ${filtered.pitch.toFixed(1)}°  roll ${filtered.roll.toFixed(1)}°\n` +
-          `x ${filtered.x.toFixed(1)}  y ${filtered.y.toFixed(1)}  z ${filtered.z.toFixed(1)}`;
+function loop() {
+  if (state.cameraReady && state.modelReady) {
+    const now = performance.now();
+    const result = state.landmarker.detectForVideo(els.video, now);
+    const matrices = result.facialTransformationMatrixes;
+    if (matrices && matrices.length > 0) {
+      const raw = computePose(matrices[0].data);
+      state.lastRaw = raw;
+      // First-run bootstrap (in case calibration is empty)
+      if (!state.calibration.center) state.calibration.center = { ...raw };
+
+      if (state.mode === "calibrating") {
+        const step = STEPS[state.calStepIdx];
+        const elapsed = now - state.calStepStart;
+        if (step.axis === null) {
+          for (const k of RAW_KEYS) state.calCenterBuf[k] += raw[k];
+          state.calCenterCount++;
+        } else if (state.calibration.center) {
+          const v = raw[step.axis] - state.calibration.center[step.axis];
+          if (step.sign > 0 && v > state.calPeak) state.calPeak = v;
+          if (step.sign < 0 && v < state.calPeak) state.calPeak = v;
+        }
+        const remaining = Math.max(0, step.duration - elapsed) / 1000;
+        setOverlay({
+          small: `Étape ${state.calStepIdx + 1} / ${STEPS.length}`,
+          arrow: step.arrow,
+          title: step.title,
+          sub: step.sub,
+          num: Math.ceil(remaining),
+          ratio: Math.min(1, elapsed / step.duration),
+        });
+        if (elapsed >= step.duration) onCalibrationFrameDone(state.calStepIdx);
+      } else if (state.mode === "countdown") {
+        const remaining = state.countdownEndAt - now;
+        if (remaining <= 0) {
+          state.mode = "active";
+          setOverlay(null);
+          resetFilters();
+          setStatePill();
+        } else {
+          const total = 10000; // visual ring assumes ~10s, but works for any duration
+          setOverlay({
+            small: "Place le téléphone derrière toi",
+            title: "Démarrage du tracking",
+            num: Math.ceil(remaining / 1000),
+            ratio: 1 - (remaining / total),
+          });
+        }
+      } else if (state.mode === "active") {
+        const out = applyCenterAndScale(raw);
+        if (out) {
+          const t = now;
+          const filtered = {
+            yaw: filters.yaw.filter(out.yaw, t),
+            pitch: filters.pitch.filter(out.pitch, t),
+            roll: filters.roll.filter(out.roll, t),
+            x: filters.x.filter(out.x, t),
+            y: filters.y.filter(out.y, t),
+            z: filters.z.filter(out.z, t),
+          };
+          send(filtered);
+        }
       }
     }
-  }
-  state.frames++;
-  if (now - state.fpsAt > 1000) {
-    setPill(els.model, `modèle : ${state.frames} ips`, "ok");
-    state.frames = 0; state.fpsAt = now;
   }
   requestAnimationFrame(loop);
 }
 
-els.start.addEventListener("click", async () => {
-  els.start.disabled = true;
+// ----- Bootstrap ---------------------------------------------------------
+
+async function bootstrap() {
   try {
-    connectWS();
     await initCamera();
-    await initModel();
-    await acquireWakeLock();
-    state.running = true;
-    requestAnimationFrame(loop);
   } catch (e) {
-    setPill(els.cam, "caméra : erreur", "bad");
-    console.error(e);
-    els.start.disabled = false;
-  }
-});
-
-els.recenter.addEventListener("click", () => {
-  if (state.lastRaw) {
-    state.calibration.center = { ...state.lastRaw };
-    saveCalibration(state.calibration);
-    resetFilters();
-    state.suppressUntil = 0;
-  }
-});
-
-els.pauseResume.addEventListener("click", () => {
-  if (state.paused) {
-    state.paused = false;
-    state.suppressUntil = 0;
-    resetFilters();
-    if (state.lastRaw) {
-      state.calibration.center = { ...state.lastRaw };
-      saveCalibration(state.calibration);
-    }
-    els.pauseResume.textContent = "Pause";
-    setPill(els.cam, `caméra : ${state.facingMode === "user" ? "avant" : "arrière"} ${els.video.videoWidth}×${els.video.videoHeight}`, "ok");
-  } else {
-    state.paused = true;
-    els.pauseResume.textContent = "Reprendre";
-  }
-});
-
-els.flip.addEventListener("click", async () => {
-  if (els.flip.disabled) return;
-  els.flip.disabled = true;
-  const previous = state.facingMode;
-  state.facingMode = previous === "user" ? "environment" : "user";
-  // On suspend l'envoi tant que l'utilisateur n'a pas repositionné le téléphone.
-  suppressFor(60_000);
-  resetFilters();
-  if (state.running) {
-    try { await initCamera(); }
-    catch (e) {
-      state.facingMode = previous;
-      await initCamera();
-    }
-  }
-  setPill(els.cam, "caméra : place le téléphone, puis Reprendre", "ok");
-  state.paused = true;
-  els.pauseResume.textContent = "Reprendre";
-  els.flip.disabled = false;
-});
-
-// ----- Calibration wizard -----------------------------------------------
-
-const STEPS = [
-  { axis: null,    sign: 0,  arrow: "·",  title: "Regarde droit devant",          sub: "Reste bien centré et immobile.",                    duration: 3000 },
-  { axis: "yaw",   sign: -1, arrow: "←",  title: "Tourne la tête à fond à gauche", sub: "Sans bouger les épaules.",                          duration: 5000 },
-  { axis: "yaw",   sign: +1, arrow: "→",  title: "Tourne la tête à fond à droite", sub: "Sans bouger les épaules.",                          duration: 5000 },
-  { axis: "pitch", sign: +1, arrow: "↑",  title: "Regarde en haut",                sub: "Lève la tête au maximum confortable.",              duration: 5000 },
-  { axis: "pitch", sign: -1, arrow: "↓",  title: "Regarde en bas",                 sub: "Baisse la tête au maximum confortable.",            duration: 5000 },
-  { axis: "x",     sign: -1, arrow: "↤",  title: "Penche la tête à gauche",        sub: "Glisse la tête latéralement, ne penche pas.",       duration: 5000 },
-  { axis: "x",     sign: +1, arrow: "↦",  title: "Penche la tête à droite",        sub: "Glisse la tête latéralement, ne penche pas.",       duration: 5000 },
-  { axis: "z",     sign: +1, arrow: "⊕",  title: "Approche la tête",               sub: "Avance vers la caméra (lecture instrument).",       duration: 5000 },
-  { axis: "z",     sign: -1, arrow: "⊖",  title: "Recule la tête",                 sub: "Recule par rapport à la caméra.",                   duration: 5000 },
-];
-
-const CIRCUMFERENCE = 2 * Math.PI * 46;
-
-function showCalUI(step, idx) {
-  els.cal.classList.add("show");
-  els.calStep.textContent = `Étape ${idx + 1} / ${STEPS.length}`;
-  els.calArrow.textContent = step.arrow;
-  els.calTitle.textContent = step.title;
-  els.calSub.textContent = step.sub;
-}
-
-function setCalProgress(elapsed, duration) {
-  const remaining = Math.max(0, duration - elapsed) / 1000;
-  els.calNum.textContent = Math.ceil(remaining).toString();
-  const ratio = Math.min(1, elapsed / duration);
-  els.calRing.style.strokeDashoffset = String(CIRCUMFERENCE * (1 - ratio));
-}
-
-function hideCalUI() {
-  els.cal.classList.remove("show");
-}
-
-async function waitFreshFrame() {
-  // Poll until detectForVideo has produced a fresh raw pose this session.
-  const t0 = performance.now();
-  while (!state.lastRaw && performance.now() - t0 < 3000) {
-    await new Promise((r) => requestAnimationFrame(r));
-  }
-}
-
-async function runCalibrationStep(step, idx) {
-  showCalUI(step, idx);
-  const start = performance.now();
-  let peak = 0;     // signed peak magnitude on the chosen side
-  const centerSnapshot = state.calibration.center
-    ? { ...state.calibration.center }
-    : (state.lastRaw ? { ...state.lastRaw } : null);
-  // Average buffer for the centering step.
-  const centerBuf = { yaw: 0, pitch: 0, roll: 0, x: 0, y: 0, z: 0 };
-  let centerCount = 0;
-
-  return new Promise((resolve) => {
-    function tick() {
-      if (state.calCancelRequested) return resolve({ cancelled: true });
-      const elapsed = performance.now() - start;
-      setCalProgress(elapsed, step.duration);
-
-      const raw = state.lastRaw;
-      if (raw) {
-        if (step.axis === null) {
-          for (const k of RAW_KEYS) centerBuf[k] += raw[k];
-          centerCount++;
-        } else if (centerSnapshot) {
-          const v = raw[step.axis] - centerSnapshot[step.axis];
-          if (step.sign > 0 && v > peak) peak = v;
-          if (step.sign < 0 && v < peak) peak = v;
-        }
-      }
-
-      const finished = elapsed >= step.duration || state._skipStep;
-      if (finished) {
-        state._skipStep = false;
-        if (step.axis === null && centerCount > 0) {
-          const avg = {};
-          for (const k of RAW_KEYS) avg[k] = centerBuf[k] / centerCount;
-          state.calibration.center = avg;
-        } else if (step.axis && peak !== 0) {
-          const range = state.calibration.ranges[step.axis];
-          if (step.sign > 0) range.max = peak;
-          else range.min = peak;
-        }
-        return resolve({ cancelled: false, skipped: false });
-      }
-      requestAnimationFrame(tick);
-    }
-    requestAnimationFrame(tick);
-  });
-}
-
-async function runCalibration() {
-  if (state.calRunning) return;
-  if (!state.running) {
-    alert("Appuie d'abord sur Démarrer pour activer la caméra.");
+    setPill(els.cam, "caméra : refusée", "bad");
+    els.permission.classList.remove("hidden");
     return;
   }
-  state.calRunning = true;
-  state.calCancelRequested = false;
-  const fresh = emptyCalibration();
-  fresh.ranges = JSON.parse(JSON.stringify(FALLBACK));
-  state.calibration = fresh;
-
-  await waitFreshFrame();
-
-  for (let i = 0; i < STEPS.length; i++) {
-    const r = await runCalibrationStep(STEPS[i], i);
-    if (r.cancelled) {
-      state.calRunning = false;
-      hideCalUI();
-      state.calibration = loadCalibration();
-      return;
-    }
+  try {
+    await initModel();
+  } catch (e) {
+    setPill(els.model, "modèle : erreur", "bad");
+    return;
   }
-
-  // Sanity: if a side was not captured (peak still 0), fall back to FALLBACK.
-  for (const k of RAW_KEYS) {
-    const r = state.calibration.ranges[k];
-    if (r.min === 0) r.min = FALLBACK[k].min;
-    if (r.max === 0) r.max = FALLBACK[k].max;
-  }
-  saveCalibration(state.calibration);
-  state.calRunning = false;
-  hideCalUI();
+  acquireWakeLock();
+  els.permission.classList.add("hidden");
+  setStatePill();
+  requestAnimationFrame(loop);
 }
 
-els.calibrate.addEventListener("click", runCalibration);
-els.calCancel.addEventListener("click", () => { state.calCancelRequested = true; });
-els.calSkip.addEventListener("click", () => { state._skipStep = true; });
+els.grant.addEventListener("click", () => {
+  // The user gesture allows getUserMedia + WakeLock + autoplay.
+  bootstrap();
+});
+
+// Try to connect to the relay immediately so the PC sees us.
+connectWS();
+
+// On iOS, getUserMedia and WakeLock both require a user gesture, so we
+// keep the permission overlay visible until the user taps "Autoriser".

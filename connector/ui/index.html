@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>tracksmfs · réglages</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header>
+    <h1>tracksmfs</h1>
+    <div class="status">
+      <span class="dot" id="dot"></span>
+      <span id="relay-status">connexion…</span>
+      <span class="sep">·</span>
+      <span id="phone-status">téléphone : —</span>
+      <span class="sep">·</span>
+      <span id="rate">0 paquets/s</span>
+    </div>
+    <div class="actions">
+      <button id="reset" class="ghost">Réinitialiser</button>
+    </div>
+  </header>
+
+  <section class="controls">
+    <div class="ctl-group">
+      <button id="start" class="primary">Démarrer (10 s)</button>
+      <label class="delay">
+        <span>Délai</span>
+        <input id="startDelay" type="number" min="0" max="60" step="1" value="10" />
+        <span>s</span>
+      </label>
+      <button id="pauseResume">Pause</button>
+      <button id="recenter">Recentrer</button>
+      <button id="calibrate">Calibrer</button>
+    </div>
+  </section>
+
+  <main>
+    <section class="axes">
+      <div class="head">
+        <div></div>
+        <div>Activé</div>
+        <div>Inverser</div>
+        <div>Gain</div>
+        <div>Offset</div>
+        <div>Zone morte</div>
+        <div>Entrée</div>
+        <div>Sortie</div>
+      </div>
+      <div id="rows"></div>
+    </section>
+
+    <section class="hints">
+      <h2>Conseils rapides</h2>
+      <ul>
+        <li><b>Gain</b> : amplification. Mets <code>2.0</code> si tu veux que tourner la tête de 30° fasse pivoter la vue de 60°. Mets <code>0</code> pour neutraliser.</li>
+        <li><b>Inverser</b> : coche si la vue part dans le mauvais sens (souvent utile pour le yaw avec la caméra arrière).</li>
+        <li><b>Offset</b> : centre manuel. Permet de corriger une dérive sans relancer la calibration.</li>
+        <li><b>Zone morte</b> : ignore les petits mouvements en dessous de cette valeur. Utile contre les tremblements résiduels.</li>
+      </ul>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
