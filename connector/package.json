@@ -1,0 +1,13 @@
+{
+  "name": "tracksmfs-connector",
+  "version": "0.1.0",
+  "description": "Runs inside Shadow VM. Receives head pose via WebSocket and forwards to OpenTrack via UDP.",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

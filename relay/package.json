@@ -1,0 +1,14 @@
+{
+  "name": "tracksmfs-relay",
+  "version": "0.1.0",
+  "description": "WebSocket relay between iPhone (sender) and Shadow VM connector (receiver). Deployed on Railway.",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "express": "^4.21.1"
+  }
+}

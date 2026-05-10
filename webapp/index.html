@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>tracksmfs</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #0b0d10; color: #e7eaee; font-family: -apple-system, system-ui, sans-serif; }
+    #stage { position: fixed; inset: 0; display: grid; place-items: center; }
+    video, canvas { width: 100vw; height: 100vh; object-fit: cover; transform: scaleX(-1); }
+    canvas { position: fixed; inset: 0; pointer-events: none; }
+    #hud { position: fixed; top: env(safe-area-inset-top, 0); left: 0; right: 0; padding: 12px 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; background: linear-gradient(#0b0d10cc, transparent); }
+    #hud .pill { font-size: 12px; padding: 6px 10px; border-radius: 999px; background: #ffffff14; border: 1px solid #ffffff1f; }
+    #hud .pill.ok { background: #16a34a33; border-color: #16a34a66; }
+    #hud .pill.bad { background: #dc262633; border-color: #dc262666; }
+    #ctrl { position: fixed; bottom: env(safe-area-inset-bottom, 0); left: 0; right: 0; padding: 14px; display: flex; gap: 10px; justify-content: center; }
+    button { font: inherit; font-weight: 600; padding: 12px 18px; border-radius: 12px; border: 1px solid #ffffff24; background: #1b1f25; color: inherit; }
+    button.primary { background: #2563eb; border-color: #2563eb; }
+    #stats { position: fixed; right: 10px; bottom: 70px; font-variant-numeric: tabular-nums; font-size: 11px; opacity: 0.75; text-align: right; }
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <div id="hud">
+    <span class="pill" id="ws">ws: idle</span>
+    <span class="pill" id="cam">cam: idle</span>
+    <span class="pill" id="model">model: idle</span>
+  </div>
+
+  <div id="stats"></div>
+
+  <div id="ctrl">
+    <button id="start" class="primary">Start</button>
+    <button id="recenter">Re-center</button>
+  </div>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

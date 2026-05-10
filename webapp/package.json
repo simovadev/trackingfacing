@@ -1,0 +1,6 @@
+{
+  "name": "tracksmfs-webapp",
+  "version": "0.1.0",
+  "description": "Static HTML page served by the relay. Captures face on iPhone, computes 6DoF head pose, sends via WebSocket.",
+  "private": true
+}
