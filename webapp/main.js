@@ -46,8 +46,10 @@ const FALLBACK = {
   yaw:   { min: -0.5, max: 0.5 },
   pitch: { min: -0.4, max: 0.4 },
   roll:  { min: -0.4, max: 0.4 },
-  x: { min: -3, max: 3 },
-  y: { min: -3, max: 3 },
+  // X and Y now come from nose-tip 2D position scaled by 50, so a
+  // typical lateral motion produces ~5-10 units. Z stays in matrix units.
+  x: { min: -8, max: 8 },
+  y: { min: -8, max: 8 },
   z: { min: -5, max: 5 },
 };
 
@@ -385,9 +387,25 @@ function eulerFromMatrix(m) {
   return { yaw, pitch, roll };
 }
 
-function computePose(matrix) {
+// MediaPipe's matrix translation reports the canonical face origin in
+// camera space. Y barely moves when the user simply raises their head
+// (most of that motion is captured as pitch). So we override X and Y
+// with the position of the nose tip landmark (index 1) projected in
+// normalized screen coordinates and re-expressed in face-units, which
+// is dramatically more responsive for "head up/down" type movement.
+function computePose(matrix, landmarks) {
   const e = eulerFromMatrix(matrix);
-  const tx = matrix[12], ty = matrix[13], tz = matrix[14];
+  let tx = matrix[12];
+  let ty = matrix[13];
+  const tz = matrix[14];
+  if (landmarks && landmarks.length > 1) {
+    const nose = landmarks[1]; // normalized [0..1] coordinates in image
+    // Convert to centered, scaled coordinates in face-units. The
+    // factor 50 brings the magnitude into the same order as the
+    // matrix translation (~ a few units when looking around).
+    tx = (nose.x - 0.5) * 50;
+    ty = (0.5 - nose.y) * 50; // y axis flipped: image y grows downward
+  }
   const raw = { yaw: e.yaw, pitch: e.pitch, roll: e.roll, x: tx, y: ty, z: tz };
   for (const k of RAW_KEYS) raw[k] *= REAR_CAMERA_FLIP[k];
   return raw;
@@ -409,6 +427,16 @@ function applyCenterAndScale(pose) {
   const r = state.calibration.ranges;
   const ce = {};
   for (const k of RAW_KEYS) ce[k] = pose[k] - c[k];
+  // Distance compensation for translations: when the user is closer to
+  // the camera than at calibration time, the same real movement produces
+  // larger raw X/Y values (perspective). We rescale X and Y by the ratio
+  // |Zref| / |Zcurrent| so the sensitivity stays consistent regardless
+  // of distance. Z is left untouched (it is already a real distance).
+  const zRef = Math.abs(c.z) || 50;
+  const zNow = Math.abs(pose.z) || zRef;
+  const distScale = zNow / zRef;
+  ce.x *= distScale;
+  ce.y *= distScale;
   return {
     yaw: mapAxis(ce.yaw, r.yaw, TARGET.yaw),
     pitch: mapAxis(ce.pitch, r.pitch, TARGET.pitch),
@@ -676,7 +704,7 @@ function loop() {
     renderBroadcastFrame();
     renderPhoneGizmo();
     if (matrices && matrices.length > 0) {
-      const raw = computePose(matrices[0].data);
+      const raw = computePose(matrices[0].data, lastLandmarks);
       state.lastRaw = raw;
       // First-run bootstrap (in case calibration is empty)
       if (!state.calibration.center) state.calibration.center = { ...raw };

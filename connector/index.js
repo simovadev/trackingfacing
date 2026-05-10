@@ -32,9 +32,11 @@ function defaultSettings() {
     yaw:   tx(1.0, 1.6),
     pitch: tx(1.0, 1.5),
     roll:  tx(1.0, 1.2),
-    x:     tx(1.0, 1.3),
-    y:     tx(1.0, 1.3),
-    z:     tx(1.0, 1.3),
+    // Translations: lower default gain so close-up movements aren't
+    // overwhelming. Distance compensation already happens on the phone.
+    x:     tx(0.5, 1.4),
+    y:     tx(0.5, 1.4),
+    z:     tx(0.6, 1.3),
   };
 }
 
