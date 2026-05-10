@@ -69,7 +69,13 @@ let settings = loadSettings();
 const udp = dgram.createSocket("udp4");
 const udpBuf = Buffer.allocUnsafe(48);
 
-function applyAxis(value, conf) {
+// Per-axis "full scale" used to normalize the value before applying expo.
+// Must match the TARGET used on the phone side: yaw +/-90, pitch +/-60,
+// X/Z +/-15. Used so that expo curves the response without exploding
+// the magnitude (e.g. 70^1.6 would give ~900).
+const SCALE = { yaw: 90, pitch: 60, roll: 30, x: 15, y: 15, z: 15 };
+
+function applyAxis(value, conf, scale) {
   if (!conf.enabled) return 0;
   let v = value + (conf.offset || 0);
   if (conf.invert) v = -v;
@@ -79,18 +85,21 @@ function applyAxis(value, conf) {
     v = v > 0 ? v - dz : v + dz;
   }
   const expo = conf.expo == null ? 1 : conf.expo;
-  if (expo !== 1) v = Math.sign(v) * Math.pow(Math.abs(v), expo);
+  if (expo !== 1 && scale > 0) {
+    const n = Math.max(-1, Math.min(1, v / scale));
+    v = Math.sign(n) * Math.pow(Math.abs(n), expo) * scale;
+  }
   return v * (conf.gain == null ? 1 : conf.gain);
 }
 
 function sendPose(rawPose) {
   const out = {
-    x:     applyAxis(rawPose.x || 0,     settings.x),
-    y:     applyAxis(rawPose.y || 0,     settings.y),
-    z:     applyAxis(rawPose.z || 0,     settings.z),
-    yaw:   applyAxis(rawPose.yaw || 0,   settings.yaw),
-    pitch: applyAxis(rawPose.pitch || 0, settings.pitch),
-    roll:  applyAxis(rawPose.roll || 0,  settings.roll),
+    x:     applyAxis(rawPose.x || 0,     settings.x,     SCALE.x),
+    y:     applyAxis(rawPose.y || 0,     settings.y,     SCALE.y),
+    z:     applyAxis(rawPose.z || 0,     settings.z,     SCALE.z),
+    yaw:   applyAxis(rawPose.yaw || 0,   settings.yaw,   SCALE.yaw),
+    pitch: applyAxis(rawPose.pitch || 0, settings.pitch, SCALE.pitch),
+    roll:  applyAxis(rawPose.roll || 0,  settings.roll,  SCALE.roll),
   };
   udpBuf.writeDoubleLE(out.x, 0);
   udpBuf.writeDoubleLE(out.y, 8);
