@@ -18,7 +18,7 @@ button.ghost { background: transparent; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button.primary:hover { filter: brightness(1.1); }
 
-.controls { max-width: 1200px; margin: 18px auto 0; padding: 0 22px; }
+.controls { margin: 18px 0 0; padding: 0 22px; }
 .ctl-group { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 14px 18px; background: #11151a; border: 1px solid var(--line); border-radius: 14px; }
 .ctl-group .delay { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; }
 .ctl-group .delay input { width: 60px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line2); background: #0b0d10; color: var(--fg); font: inherit; font-variant-numeric: tabular-nums; }
@@ -34,7 +34,19 @@ button.primary:hover { filter: brightness(1.1); }
 .cal-diag .warn { color: #fbbf24; }
 .cal-diag .bad { color: #f87171; }
 
-main { max-width: 1200px; margin: 0 auto; padding: 22px; display: grid; gap: 22px; }
+main { padding: 22px; display: grid; gap: 22px; }
+
+/* Two-column layout: big camera left, controls + axes right. The
+   left column stays sticky so the camera stays in view while the
+   user scrolls the right column. */
+main.split { grid-template-columns: minmax(540px, 1.4fr) minmax(540px, 1fr); align-items: start; }
+main.split .left { position: sticky; top: 78px; display: grid; gap: 22px; }
+main.split .right { display: grid; gap: 22px; }
+
+@media (max-width: 1200px) {
+  main.split { grid-template-columns: 1fr; }
+  main.split .left { position: static; }
+}
 
 section { background: #11151a; border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
 section h2 { margin: 0 0 8px; font-size: 14px; font-weight: 700; opacity: 0.85; }
@@ -59,8 +71,8 @@ section h2 { margin: 0 0 8px; font-size: 14px; font-weight: 700; opacity: 0.85; 
 .preview h2 { margin: 0; }
 .preview-actions { display: flex; align-items: center; gap: 12px; }
 .preview-actions .muted { color: var(--muted); font-size: 12px; }
-.preview-stage { position: relative; aspect-ratio: 4 / 3; max-height: 360px; background: #000; }
-.preview-stage video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.preview-stage { position: relative; aspect-ratio: 16 / 9; background: #000; width: 100%; }
+.preview-stage video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
 .preview-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 14px; pointer-events: none; }
 .preview-empty.hidden { display: none; }
 

@@ -285,13 +285,56 @@ const RAW_UNITS  = { yaw: "rad", pitch: "rad", roll: "rad", x: "u", y: "u", z: "
 // Heuristic: a healthy calibrated range should be well above this in raw units.
 const MIN_HEALTHY_SPAN = { yaw: 0.15, pitch: 0.10, roll: 0.10, x: 1.0, y: 1.0, z: 1.0 };
 
+let calTableBuilt = false;
+
+function ensureCalTable() {
+  if (calTableBuilt) return;
+  let html = '<table><thead><tr><th>Axe</th><th>Centre</th><th>Min</th><th>Max</th><th>Amplitude</th><th>État</th></tr></thead><tbody>';
+  for (const k of RAW_AXES) {
+    html += `<tr data-axis="${k}">
+      <td class="axis">${RAW_LABELS[k]}</td>
+      <td><input class="cal-edit" data-field="center" type="number" step="0.01" /></td>
+      <td><input class="cal-edit" data-field="min"    type="number" step="0.01" /></td>
+      <td><input class="cal-edit" data-field="max"    type="number" step="0.01" /></td>
+      <td class="span"></td>
+      <td class="status"></td>
+    </tr>`;
+  }
+  html += '</tbody></table><div class="muted small" style="margin-top:8px">Astuce : tape une nouvelle valeur dans une cellule pour ajuster la calibration en direct, sans relancer le wizard.</div>';
+  els.calDiag.innerHTML = html;
+  // Wire input -> command
+  els.calDiag.querySelectorAll('input.cal-edit').forEach((inp) => {
+    inp.addEventListener('change', () => {
+      const tr = inp.closest('tr');
+      const k = tr.dataset.axis;
+      const field = inp.dataset.field;
+      const v = parseFloat(inp.value);
+      if (Number.isNaN(v)) return;
+      const partial = { ranges: {} };
+      if (field === 'center') {
+        partial.center = {};
+        partial.center[k] = v;
+      } else {
+        partial.ranges[k] = {};
+        partial.ranges[k][field] = v;
+      }
+      sendCommand({ type: 'setCalibration', calibration: partial });
+    });
+  });
+  calTableBuilt = true;
+}
+
 function renderCalDiag(phone) {
   const cal = phone?.calibration;
   if (!cal || !cal.ranges) {
-    els.calDiag.innerHTML = '<div class="muted">aucune calibration en mémoire</div>';
+    if (calTableBuilt) {
+      els.calDiag.querySelectorAll('input.cal-edit').forEach((i) => { if (document.activeElement !== i) i.value = ''; });
+    } else {
+      els.calDiag.innerHTML = '<div class="muted">aucune calibration en mémoire</div>';
+    }
     return;
   }
-  let html = '<table><thead><tr><th>Axe</th><th>Centre</th><th>Min</th><th>Max</th><th>Amplitude</th><th>État</th></tr></thead><tbody>';
+  ensureCalTable();
   for (const k of RAW_AXES) {
     const r = cal.ranges[k] || { min: 0, max: 0 };
     const c = cal.center?.[k];
@@ -301,17 +344,22 @@ function renderCalDiag(phone) {
     let label = "OK";
     if (span <= 0) { cls = "bad"; label = "non calibré"; }
     else if (span < min) { cls = "warn"; label = "amplitude faible"; }
-    html += `<tr>
-      <td class="axis">${RAW_LABELS[k]}</td>
-      <td>${c == null ? "—" : c.toFixed(3)}</td>
-      <td>${(r.min || 0).toFixed(3)}</td>
-      <td>${(r.max || 0).toFixed(3)}</td>
-      <td>${span.toFixed(3)} ${RAW_UNITS[k]}</td>
-      <td class="${cls}">${label}</td>
-    </tr>`;
+    const tr = els.calDiag.querySelector(`tr[data-axis="${k}"]`);
+    if (!tr) continue;
+    const inputs = {
+      center: tr.querySelector('input[data-field="center"]'),
+      min:    tr.querySelector('input[data-field="min"]'),
+      max:    tr.querySelector('input[data-field="max"]'),
+    };
+    // Don't overwrite a cell the user is currently editing.
+    if (document.activeElement !== inputs.center) inputs.center.value = c == null ? '' : c.toFixed(3);
+    if (document.activeElement !== inputs.min)    inputs.min.value    = (r.min || 0).toFixed(3);
+    if (document.activeElement !== inputs.max)    inputs.max.value    = (r.max || 0).toFixed(3);
+    tr.querySelector('.span').textContent = `${span.toFixed(3)} ${RAW_UNITS[k]}`;
+    const statusCell = tr.querySelector('.status');
+    statusCell.textContent = label;
+    statusCell.className = `status ${cls}`;
   }
-  html += '</tbody></table>';
-  els.calDiag.innerHTML = html;
 }
 
 // ----- WS to local connector --------------------------------------------

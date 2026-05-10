@@ -26,7 +26,7 @@ const els = {
 // Hidden canvas used as the WebRTC video source. We draw the camera frame
 // plus optional gizmo overlay into it, and capture its stream.
 const broadcastCanvas = document.createElement("canvas");
-broadcastCanvas.width = 480;
+broadcastCanvas.width = 640;
 broadcastCanvas.height = 360;
 const broadcastCtx = broadcastCanvas.getContext("2d");
 const gizmoCtx = els.gizmo.getContext("2d");
@@ -251,6 +251,21 @@ function handleCommand(msg) {
       state.debugRecordingEndAt = performance.now() + Number(msg.duration ?? 5) * 1000;
       send({ type: "debugRecordingStart" });
       return;
+    case "setCalibration":
+      // Manually overwrite the calibration (full or partial). Useful
+      // for fine-tuning ranges from the PC tuner.
+      if (msg.calibration && typeof msg.calibration === "object") {
+        if (msg.calibration.center) state.calibration.center = { ...msg.calibration.center };
+        if (msg.calibration.ranges) {
+          for (const k of RAW_KEYS) {
+            if (msg.calibration.ranges[k]) {
+              state.calibration.ranges[k] = { ...msg.calibration.ranges[k] };
+            }
+          }
+        }
+        saveCalibration(state.calibration);
+      }
+      return;
   }
 }
 
@@ -262,7 +277,7 @@ async function initCamera() {
     audio: false,
     video: {
       facingMode: { ideal: "environment" },
-      width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 60 },
+      width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 },
     },
   });
   state.stream = stream;
