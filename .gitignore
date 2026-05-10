@@ -1,5 +1,6 @@
 node_modules/
 *.log
+*.err
 .env
 .env.*
 .DS_Store

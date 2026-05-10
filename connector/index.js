@@ -1,33 +1,33 @@
-import { WebSocket, WebSocketServer } from "ws";
-import dgram from "node:dgram";
-import http from "node:http";
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
-import { fileURLToPath } from "node:url";
+"use strict";
+
+const { WebSocket, WebSocketServer } = require("ws");
+const dgram = require("node:dgram");
+const http = require("node:http");
+const fs = require("node:fs");
+const path = require("node:path");
+const os = require("node:os");
 
 // ----- Paths (must work both in dev and inside a pkg .exe) -------------
 
+// In a pkg snapshot, __dirname points inside the virtual filesystem and
+// can be used to read files declared as assets in package.json.
 const isPkg = typeof process.pkg !== "undefined";
-const __dirname = isPkg ? path.dirname(process.execPath) : path.dirname(fileURLToPath(import.meta.url));
-// In pkg builds the snapshot exposes assets via path.join(__dirname, "ui").
-// In dev mode we just resolve next to this file.
-const uiDir = isPkg ? path.join(path.dirname(fileURLToPath(import.meta.url)), "ui") : path.join(__dirname, "ui");
+const uiDir = path.join(__dirname, "ui");
 
 const settingsDir = path.join(os.homedir(), "AppData", "Roaming", "tracksmfs");
 const settingsPath = path.join(settingsDir, "settings.json");
 
 // ----- Configuration ---------------------------------------------------
 
-const RELAY_URL = process.env.RELAY_URL ?? "wss://trackingfacing-production.up.railway.app/connector";
-const OPENTRACK_HOST = process.env.OPENTRACK_HOST ?? "127.0.0.1";
-const OPENTRACK_PORT = Number(process.env.OPENTRACK_PORT ?? 4242);
-const TUNER_PORT = Number(process.env.TUNER_PORT ?? 7777);
+const RELAY_URL = process.env.RELAY_URL || "wss://trackingfacing-production.up.railway.app/connector";
+const OPENTRACK_HOST = process.env.OPENTRACK_HOST || "127.0.0.1";
+const OPENTRACK_PORT = Number(process.env.OPENTRACK_PORT || 4242);
+const TUNER_PORT = Number(process.env.TUNER_PORT || 7777);
 
 const AXES = ["yaw", "pitch", "roll", "x", "y", "z"];
 
 function defaultSettings() {
-  const tx = (gain, expo = 1.5) => ({ gain, offset: 0, deadzone: 0, expo, invert: false, enabled: true });
+  const tx = (gain, expo) => ({ gain, offset: 0, deadzone: 0, expo: expo == null ? 1.5 : expo, invert: false, enabled: true });
   return {
     yaw:   tx(1.0, 1.6),
     pitch: tx(1.0, 1.5),
@@ -67,12 +67,8 @@ let settings = loadSettings();
 // ----- UDP to OpenTrack (6 LE doubles, 48 bytes) -----------------------
 
 const udp = dgram.createSocket("udp4");
-const buf = Buffer.allocUnsafe(48);
+const udpBuf = Buffer.allocUnsafe(48);
 
-// Apply per-axis response: deadzone -> exponential curve -> gain.
-// expo = 1 keeps the signal linear; expo > 1 dampens the center
-// (fine aiming) and amplifies the edges (fast head turns), the way
-// TrackIR/OpenTrack curves behave.
 function applyAxis(value, conf) {
   if (!conf.enabled) return 0;
   let v = value + (conf.offset || 0);
@@ -82,27 +78,27 @@ function applyAxis(value, conf) {
     if (Math.abs(v) < dz) return 0;
     v = v > 0 ? v - dz : v + dz;
   }
-  const expo = conf.expo ?? 1;
+  const expo = conf.expo == null ? 1 : conf.expo;
   if (expo !== 1) v = Math.sign(v) * Math.pow(Math.abs(v), expo);
-  return v * (conf.gain ?? 1);
+  return v * (conf.gain == null ? 1 : conf.gain);
 }
 
 function sendPose(rawPose) {
   const out = {
-    x:     applyAxis(rawPose.x ?? 0,     settings.x),
-    y:     applyAxis(rawPose.y ?? 0,     settings.y),
-    z:     applyAxis(rawPose.z ?? 0,     settings.z),
-    yaw:   applyAxis(rawPose.yaw ?? 0,   settings.yaw),
-    pitch: applyAxis(rawPose.pitch ?? 0, settings.pitch),
-    roll:  applyAxis(rawPose.roll ?? 0,  settings.roll),
+    x:     applyAxis(rawPose.x || 0,     settings.x),
+    y:     applyAxis(rawPose.y || 0,     settings.y),
+    z:     applyAxis(rawPose.z || 0,     settings.z),
+    yaw:   applyAxis(rawPose.yaw || 0,   settings.yaw),
+    pitch: applyAxis(rawPose.pitch || 0, settings.pitch),
+    roll:  applyAxis(rawPose.roll || 0,  settings.roll),
   };
-  buf.writeDoubleLE(out.x, 0);
-  buf.writeDoubleLE(out.y, 8);
-  buf.writeDoubleLE(out.z, 16);
-  buf.writeDoubleLE(out.yaw, 24);
-  buf.writeDoubleLE(out.pitch, 32);
-  buf.writeDoubleLE(out.roll, 40);
-  udp.send(buf, 0, 48, OPENTRACK_PORT, OPENTRACK_HOST);
+  udpBuf.writeDoubleLE(out.x, 0);
+  udpBuf.writeDoubleLE(out.y, 8);
+  udpBuf.writeDoubleLE(out.z, 16);
+  udpBuf.writeDoubleLE(out.yaw, 24);
+  udpBuf.writeDoubleLE(out.pitch, 32);
+  udpBuf.writeDoubleLE(out.roll, 40);
+  udp.send(udpBuf, 0, 48, OPENTRACK_PORT, OPENTRACK_HOST);
   state.lastIn = rawPose;
   state.lastOut = out;
   state.packets++;
@@ -141,6 +137,8 @@ setInterval(() => {
 
 let ws;
 let backoffMs = 500;
+let heartbeat = null;
+let lastPongAt = 0;
 
 function decodeBinaryPose(buf) {
   if (buf.length !== 25 || buf[0] !== 0x01) return null;
@@ -154,9 +152,6 @@ function decodeBinaryPose(buf) {
   };
 }
 
-let heartbeat = null;
-let lastPongAt = 0;
-
 function connectRelay() {
   ws = new WebSocket(RELAY_URL);
 
@@ -164,21 +159,21 @@ function connectRelay() {
     backoffMs = 500;
     state.relayConnected = true;
     lastPongAt = Date.now();
-    console.log(`[connector] connected to relay ${RELAY_URL}`);
-    console.log(`[connector] forwarding to OpenTrack ${OPENTRACK_HOST}:${OPENTRACK_PORT}`);
+    console.log("[connector] connected to relay " + RELAY_URL);
+    console.log("[connector] forwarding to OpenTrack " + OPENTRACK_HOST + ":" + OPENTRACK_PORT);
     if (heartbeat) clearInterval(heartbeat);
     heartbeat = setInterval(() => {
       if (ws.readyState !== 1) return;
       ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
       if (Date.now() - lastPongAt > 15000) {
         console.warn("[connector] no pong for 15s, forcing reconnect");
-        try { ws.close(); } catch {}
+        try { ws.close(); } catch (_) {}
       }
     }, 5000);
   });
 
   ws.on("message", (data, isBinary) => {
-    if (isBinary || Buffer.isBuffer(data) && data[0] === 0x01) {
+    if (isBinary || (Buffer.isBuffer(data) && data[0] === 0x01)) {
       const pose = decodeBinaryPose(data);
       if (pose) sendPose(pose);
       return;
@@ -193,13 +188,11 @@ function connectRelay() {
         if (!state.phoneConnected) {
           state.lastIn = null;
           state.lastOut = null;
-          // Drop any pending camera preview when the phone goes away.
           broadcastTuner({ type: "rtc", payload: { kind: "phoneGone" } });
         }
         return;
       }
       if (msg.type === "rtc") {
-        // RTC signaling from the phone -> forward to whichever tuner UI is connected.
         broadcastTuner({ type: "rtc", payload: msg.payload });
         return;
       }
@@ -207,18 +200,17 @@ function connectRelay() {
         broadcastTuner({ type: "calibrationDone" });
         return;
       }
-      // Legacy JSON pose (kept as a fallback).
       if (typeof msg.yaw === "number") sendPose(msg);
-    } catch {}
+    } catch (_) {}
   });
 
   ws.on("close", () => {
     state.relayConnected = false;
     state.phoneConnected = false;
     if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
-    console.log(`[connector] relay closed, retrying in ${backoffMs}ms`);
+    console.log("[connector] relay closed, retrying in " + backoffMs + "ms");
     setTimeout(connectRelay, backoffMs);
-    backoffMs = Math.min(backoffMs * 2, 10_000);
+    backoffMs = Math.min(backoffMs * 2, 10000);
   });
 
   ws.on("error", (err) => {
@@ -252,10 +244,10 @@ const tuner = http.createServer((req, res) => {
         for (const a of AXES) if (incoming[a]) Object.assign(merged[a], incoming[a]);
         settings = merged;
         saveSettings(settings);
-        broadcastTuner({ type: "settings", settings });
+        broadcastTuner({ type: "settings", settings: settings });
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify(settings));
-      } catch {
+      } catch (_) {
         res.writeHead(400);
         res.end("bad json");
       }
@@ -265,7 +257,7 @@ const tuner = http.createServer((req, res) => {
   if (req.url === "/api/reset" && req.method === "POST") {
     settings = defaultSettings();
     saveSettings(settings);
-    broadcastTuner({ type: "settings", settings });
+    broadcastTuner({ type: "settings", settings: settings });
     res.writeHead(200, { "content-type": "application/json" });
     return res.end(JSON.stringify(settings));
   }
@@ -275,10 +267,10 @@ const tuner = http.createServer((req, res) => {
     req.on("end", () => {
       try {
         const cmd = JSON.parse(body);
-        if (ws?.readyState === 1) ws.send(JSON.stringify(cmd));
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify(cmd));
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
-      } catch {
+      } catch (_) {
         res.writeHead(400);
         res.end("bad json");
       }
@@ -293,7 +285,7 @@ const tuner = http.createServer((req, res) => {
   }
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); return res.end("not found"); }
-    res.writeHead(200, { "content-type": MIME[path.extname(filePath)] ?? "application/octet-stream" });
+    res.writeHead(200, { "content-type": MIME[path.extname(filePath)] || "application/octet-stream" });
     res.end(data);
   });
 });
@@ -303,37 +295,35 @@ wss.on("connection", (client) => {
   tunerClients.add(client);
   client.isAlive = true;
   client.on("pong", () => { client.isAlive = true; });
-  client.send(JSON.stringify({ type: "settings", settings }));
+  client.send(JSON.stringify({ type: "settings", settings: settings }));
   client.on("message", (data) => {
     try {
       const msg = JSON.parse(data);
       if (!msg || typeof msg !== "object") return;
-      // Forward RTC signaling from tuner UI -> phone, via the relay link.
-      if (msg.type === "rtc" && ws?.readyState === 1) {
+      if (msg.type === "rtc" && ws && ws.readyState === 1) {
         ws.send(JSON.stringify(msg));
       }
-    } catch {}
+    } catch (_) {}
   });
   client.on("close", () => tunerClients.delete(client));
 });
 
-// Drop dead tuner clients (browser tab closed, network gone, etc).
 setInterval(() => {
   for (const c of tunerClients) {
-    if (!c.isAlive) { try { c.terminate(); } catch {} continue; }
+    if (!c.isAlive) { try { c.terminate(); } catch (_) {} continue; }
     c.isAlive = false;
-    try { c.ping(); } catch {}
+    try { c.ping(); } catch (_) {}
   }
-}, 10_000);
+}, 10000);
 
 tuner.listen(TUNER_PORT, "127.0.0.1", () => {
-  console.log(`[connector] tuner UI on http://localhost:${TUNER_PORT}`);
+  console.log("[connector] tuner UI on http://localhost:" + TUNER_PORT);
 });
 
 connectRelay();
 
 process.on("SIGINT", () => {
-  ws?.close();
+  if (ws) ws.close();
   udp.close();
   tuner.close();
   process.exit(0);
