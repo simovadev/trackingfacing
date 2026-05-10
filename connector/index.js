@@ -78,20 +78,23 @@ const udpBuf = Buffer.allocUnsafe(48);
 const SCALE = { yaw: 90, pitch: 60, roll: 30, x: 15, y: 15, z: 15 };
 
 function applyAxis(value, conf, scale) {
-  if (!conf.enabled) return 0;
-  let v = value + (conf.offset || 0);
+  if (!conf || !conf.enabled) return 0;
+  if (!Number.isFinite(value)) return 0;
+  let v = value + (Number.isFinite(conf.offset) ? conf.offset : 0);
   if (conf.invert) v = -v;
-  const dz = conf.deadzone || 0;
+  const dz = Number.isFinite(conf.deadzone) ? conf.deadzone : 0;
   if (dz > 0) {
     if (Math.abs(v) < dz) return 0;
     v = v > 0 ? v - dz : v + dz;
   }
-  const expo = conf.expo == null ? 1 : conf.expo;
+  const expo = Number.isFinite(conf.expo) ? conf.expo : 1;
   if (expo !== 1 && scale > 0) {
     const n = Math.max(-1, Math.min(1, v / scale));
     v = Math.sign(n) * Math.pow(Math.abs(n), expo) * scale;
   }
-  return v * (conf.gain == null ? 1 : conf.gain);
+  const gain = Number.isFinite(conf.gain) ? conf.gain : 1;
+  const out = v * gain;
+  return Number.isFinite(out) ? out : 0;
 }
 
 function sendPose(rawPose) {
@@ -154,7 +157,7 @@ let debugBuffer = null; // null = not recording, [] = recording in progress
 
 function decodeBinaryPose(buf) {
   if (buf.length !== 25 || buf[0] !== 0x01) return null;
-  return {
+  const pose = {
     yaw:   buf.readFloatLE(1),
     pitch: buf.readFloatLE(5),
     roll:  buf.readFloatLE(9),
@@ -162,6 +165,11 @@ function decodeBinaryPose(buf) {
     y:     buf.readFloatLE(17),
     z:     buf.readFloatLE(21),
   };
+  // Drop the packet outright if any component is not finite. Better to
+  // skip a frame than to ship NaN/Infinity to OpenTrack and freeze the
+  // in-game camera.
+  for (const k of AXES) if (!Number.isFinite(pose[k])) return null;
+  return pose;
 }
 
 function connectRelay() {
@@ -210,6 +218,12 @@ function connectRelay() {
       }
       if (msg.type === "calibrationDone") {
         broadcastTuner({ type: "calibrationDone" });
+        return;
+      }
+      if (msg.type === "calibrationUpdated") {
+        // Phone ack after a manual setCalibration edit. Forward to
+        // the tuner so it can flash the cell that just changed.
+        broadcastTuner({ type: "calibrationUpdated", rejected: msg.rejected });
         return;
       }
       if (msg.type === "phoneStatus") {

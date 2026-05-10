@@ -407,11 +407,22 @@ function connectWS() {
       } else if (msg.type === "calibrationDone") {
         setRtcStatus(state.pc ? "aperçu en cours" : "inactif");
         renderPhoneOverlay({ mode: "active" });
+      } else if (msg.type === "calibrationUpdated") {
+        // Phone ack after a manual edit. If anything was rejected,
+        // log it to the console for the curious; the auto-repair means
+        // the UI already shows the corrected value on the next status tick.
+        if (Array.isArray(msg.rejected) && msg.rejected.length > 0) {
+          console.warn("[tuner] calibration values rejected:", msg.rejected.join(", "));
+        }
       } else if (msg.type === "phoneStatus") {
         renderPhoneOverlay(msg.phone || {});
         renderCalDiag(msg.phone || {});
         if (msg.phone && typeof msg.phone.bypass === "boolean") {
           els.bypass.checked = msg.phone.bypass;
+        }
+        if (msg.phone && typeof msg.phone.gizmoEnabled === "boolean" && msg.phone.gizmoEnabled !== gizmoOn) {
+          gizmoOn = msg.phone.gizmoEnabled;
+          setGizmoButtonLabel();
         }
       } else if (msg.type === "debug") {
         if (msg.phase === "start") {
@@ -441,10 +452,15 @@ function sendCommand(cmd) {
 }
 
 els.reset.addEventListener("click", async () => {
-  if (!confirm("Réinitialiser tous les réglages aux valeurs par défaut ?")) return;
+  if (!confirm("Réinitialiser TOUS les réglages et la calibration ?\n\nCela remet les sliders aux defaults et efface la calibration sauvegardée sur le téléphone.")) return;
+  // 1) Wipe connector-side settings (sliders, gains, expo, offsets...).
   const r = await fetch("/api/reset", { method: "POST" });
   state.settings = await r.json();
   build();
+  // 2) Wipe the calibration stored on the phone too. Without this,
+  // the user gets default sliders but is still riding a corrupted
+  // calibration from a previous session.
+  sendCommand({ type: "resetCalibration" });
 });
 
 els.start.addEventListener("click", () => {
@@ -468,9 +484,12 @@ els.rtcToggle.addEventListener("click", () => {
 });
 
 let gizmoOn = true;
+function setGizmoButtonLabel() {
+  els.gizmoToggle.textContent = gizmoOn ? "Masquer le gizmo" : "Afficher le gizmo";
+}
 els.gizmoToggle.addEventListener("click", () => {
   gizmoOn = !gizmoOn;
-  els.gizmoToggle.textContent = gizmoOn ? "Masquer le gizmo" : "Afficher le gizmo";
+  setGizmoButtonLabel();
   sendCommand({ type: "setGizmo", enabled: gizmoOn });
 });
 

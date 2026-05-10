@@ -41,7 +41,11 @@ const RAW_KEYS = ["yaw", "pitch", "roll", "x", "y", "z"];
 // le yaw et le X bruts pour rester cohérent avec la calibration et les axes.
 const REAR_CAMERA_FLIP = { yaw: -1, pitch: 1, roll: -1, x: -1, y: 1, z: 1 };
 
-const TARGET = { yaw: 90, pitch: 60, roll: 0, x: 15, y: 0, z: 15 };
+// Output range sent to OpenTrack per axis. roll and y were previously
+// hard-coded to 0 which silently zeroed those axes regardless of the
+// rest of the chain. Roll can still be neutralized by unchecking it
+// in the tuner; Y is wanted now.
+const TARGET = { yaw: 90, pitch: 60, roll: 30, x: 15, y: 15, z: 15 };
 const FALLBACK = {
   yaw:   { min: -0.5, max: 0.5 },
   pitch: { min: -0.4, max: 0.4 },
@@ -59,13 +63,39 @@ function emptyCalibration() {
   return { center: null, ranges };
 }
 
+// True when v is a finite number within a safe magnitude. Used to
+// detect corrupted calibration values (NaN, Infinity, accidental 10x
+// edits like -210 instead of -21).
+function isSaneValue(v) {
+  return typeof v === "number" && Number.isFinite(v) && Math.abs(v) < 1000;
+}
+
+// Repair an in-memory calibration: replace any non-sane field with the
+// FALLBACK, ensure min < max for every axis. Returns the same object.
+function sanitizeCalibration(cal) {
+  if (!cal || typeof cal !== "object") return emptyCalibration();
+  if (!cal.center || typeof cal.center !== "object") cal.center = null;
+  if (cal.center) {
+    for (const k of RAW_KEYS) {
+      if (!isSaneValue(cal.center[k])) delete cal.center[k];
+    }
+  }
+  if (!cal.ranges || typeof cal.ranges !== "object") cal.ranges = {};
+  for (const k of RAW_KEYS) {
+    let r = cal.ranges[k];
+    if (!r || typeof r !== "object" || !isSaneValue(r.min) || !isSaneValue(r.max) || r.min >= r.max) {
+      cal.ranges[k] = { ...FALLBACK[k] };
+    }
+  }
+  return cal;
+}
+
 function loadCalibration() {
   try {
     const raw = localStorage.getItem(CAL_KEY);
     if (!raw) return emptyCalibration();
     const p = JSON.parse(raw);
-    if (!p?.center || !p?.ranges) return emptyCalibration();
-    return p;
+    return sanitizeCalibration(p);
   } catch { return emptyCalibration(); }
 }
 function saveCalibration(c) { try { localStorage.setItem(CAL_KEY, JSON.stringify(c)); } catch {} }
@@ -253,16 +283,19 @@ function handleCommand(msg) {
       return;
     case "setCalibration":
       // Partial-merge the incoming calibration into the existing one.
-      // We MUST merge key-by-key (not replace the object) otherwise
-      // editing a single field from the tuner wipes the other axes.
+      // Merge key-by-key (not replace the object) and reject NaN /
+      // Infinity / out-of-magnitude values, then ensure min < max
+      // afterwards so a stray edit cannot turn an axis into garbage.
       if (msg.calibration && typeof msg.calibration === "object") {
         if (!state.calibration.center) state.calibration.center = {};
         if (!state.calibration.ranges) state.calibration.ranges = {};
+        const rejected = [];
         if (msg.calibration.center) {
           for (const k of RAW_KEYS) {
-            if (msg.calibration.center[k] != null) {
-              state.calibration.center[k] = msg.calibration.center[k];
-            }
+            const v = msg.calibration.center[k];
+            if (v == null) continue;
+            if (isSaneValue(v)) state.calibration.center[k] = v;
+            else rejected.push(`${k}.center`);
           }
         }
         if (msg.calibration.ranges) {
@@ -270,11 +303,25 @@ function handleCommand(msg) {
             const incoming = msg.calibration.ranges[k];
             if (!incoming) continue;
             if (!state.calibration.ranges[k]) state.calibration.ranges[k] = { ...FALLBACK[k] };
-            if (incoming.min != null) state.calibration.ranges[k].min = incoming.min;
-            if (incoming.max != null) state.calibration.ranges[k].max = incoming.max;
+            const r = state.calibration.ranges[k];
+            if (incoming.min != null) {
+              if (isSaneValue(incoming.min)) r.min = incoming.min;
+              else rejected.push(`${k}.min`);
+            }
+            if (incoming.max != null) {
+              if (isSaneValue(incoming.max)) r.max = incoming.max;
+              else rejected.push(`${k}.max`);
+            }
+            // Repair degenerate ranges where the edit would make min >= max.
+            if (r.min >= r.max) {
+              Object.assign(r, FALLBACK[k]);
+              rejected.push(`${k}.range (degenerate)`);
+            }
           }
         }
+        sanitizeCalibration(state.calibration);
         saveCalibration(state.calibration);
+        send({ type: "calibrationUpdated", rejected, calibration: state.calibration });
       }
       return;
   }
@@ -456,12 +503,15 @@ function computePose(matrix, landmarks) {
   if (portrait) {
     // Phone held vertically: the sensor frame is rotated -90 deg from
     // the world frame. What MediaPipe calls "yaw" is roll in the user
-    // frame, and vice versa.
+    // frame, and vice versa. Translations come from the nose-tip in
+    // IMAGE space — that frame already follows what the user sees on
+    // the screen, so nx stays lateral and ny stays vertical regardless
+    // of the device orientation.
     yaw   = -e.roll;
     pitch =  e.pitch;
     roll  =  e.yaw;
-    x     =  ny;     // horizontal head motion shows up in the image's vertical axis
-    y     = -nx;
+    x     =  nx;
+    y     =  ny;
   } else {
     yaw   = e.yaw;
     pitch = e.pitch;
@@ -477,11 +527,18 @@ function computePose(matrix, landmarks) {
 
 function mapAxis(value, range, target) {
   if (target === 0) return 0;
+  if (!Number.isFinite(value) || !range) return 0;
+  // Defensive: a degenerate range (max <= 0 on the positive side or
+  // min >= 0 on the negative side) would either explode the mapping or
+  // saturate it instantly. Return 0 instead, the user can recover by
+  // recalibrating.
   if (value >= 0) {
-    const span = Math.max(1e-6, range.max);
+    const span = range.max;
+    if (!Number.isFinite(span) || span <= 1e-6) return 0;
     return Math.max(-target, Math.min(target, (value / span) * target));
   }
-  const span = Math.max(1e-6, -range.min);
+  const span = -range.min;
+  if (!Number.isFinite(span) || span <= 1e-6) return 0;
   return Math.max(-target, Math.min(target, (value / span) * target));
 }
 
@@ -496,8 +553,13 @@ function applyCenterAndScale(pose) {
   // larger raw X/Y values (perspective). We rescale X and Y by the ratio
   // |Zref| / |Zcurrent| so the sensitivity stays consistent regardless
   // of distance. Z is left untouched (it is already a real distance).
+  // When the user is closer to the camera (smaller |Z|), a given head
+  // motion produces a LARGER apparent nose-tip displacement than at
+  // reference distance. We multiply by |Zcurrent| / |Zref| so the
+  // calibrated sensitivity is preserved across distances: closer the
+  // user is, smaller the factor, the more we damp the input.
   const zRef = Math.abs(c.z) || 50;
-  const zNow = Math.abs(pose.z) || zRef;
+  const zNow = Math.max(1, Math.abs(pose.z) || zRef);
   const distScale = zNow / zRef;
   ce.x *= distScale;
   ce.y *= distScale;
@@ -676,6 +738,7 @@ function maybeSendStatus(now) {
     type: "phoneStatus",
     mode: state.mode,
     bypass: state.bypass,
+    gizmoEnabled: state.gizmoEnabled,
     calibration: state.calibration,
   };
   if (state.mode === "countdown") {
