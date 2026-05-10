@@ -58,6 +58,8 @@ const els = {
   gazeCalSub: document.getElementById("gazeCalSub"),
   gazeCalNum: document.getElementById("gazeCalNum"),
   gazeCalCancel: document.getElementById("gazeCalCancel"),
+  gazeCalStep: document.getElementById("gazeCalStep"),
+  cameraPosition: document.getElementById("cameraPosition"),
 };
 
 const PO_CIRC = 2 * Math.PI * 46;
@@ -442,6 +444,11 @@ function connectWS() {
           gizmoOn = msg.phone.gizmoEnabled;
           setGizmoButtonLabel();
         }
+        if (msg.phone && typeof msg.phone.cameraPosition === "string" &&
+            els.cameraPosition && document.activeElement !== els.cameraPosition &&
+            els.cameraPosition.value !== msg.phone.cameraPosition) {
+          els.cameraPosition.value = msg.phone.cameraPosition;
+        }
         // Live gaze indicator + sample collection during gaze calibration.
         if (msg.phone) {
           const gr = msg.phone.lastGazeRaw;
@@ -786,6 +793,12 @@ function finalizeGazeCalibration() {
 
 els.gazeCalibrate.addEventListener("click", startGazeCalibration);
 els.gazeCalCancel.addEventListener("click", gazeCalibrationCancel);
+
+if (els.cameraPosition) {
+  els.cameraPosition.addEventListener("change", () => {
+    sendCommand({ type: "setCameraPosition", position: els.cameraPosition.value });
+  });
+}
 
 updateGazeSliderLabels();
 

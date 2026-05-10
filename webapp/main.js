@@ -197,7 +197,20 @@ const state = {
   gazeCalibration: loadGazeCalibration(),
   lastGaze: { x: 0, y: 0 },
   lastGazeRaw: { x: 0, y: 0 },
+  // Physical position of the phone relative to the user's screen.
+  // "bas"    = phone sits below the screen, camera looking up.
+  // "centre" = phone is roughly at eye level (e.g. on top of monitor).
+  // "haut"   = phone sits above the screen, camera looking down.
+  // Affects the natural pitch the camera sees AND the iris-vs-orbit
+  // sign for vertical gaze.
+  cameraPosition: localStorage.getItem("tracksmfs.cameraPosition") || "centre",
 };
+
+// Pitch the phone naturally adds to the raw head pose when placed at
+// the given location. Empirical defaults for ~70 cm user distance.
+// User can override per-axis from the tuner if needed.
+const CAMERA_PITCH_COMP = { bas: -0.26, centre: 0, haut: 0.26 }; // radians (~15 deg)
+const CAMERA_GAZE_Y_FLIP = { bas: -1, centre: 1, haut: -1 };
 
 // Bypass mode: send angles in degrees / translations in cm without
 // calibration. Use a fixed conversion so the values are usable.
@@ -359,6 +372,12 @@ function handleCommand(msg) {
       return;
     case "setGazeEnabled":
       state.gazeEnabled = !!msg.enabled;
+      return;
+    case "setCameraPosition":
+      if (msg.position === "bas" || msg.position === "centre" || msg.position === "haut") {
+        state.cameraPosition = msg.position;
+        try { localStorage.setItem("tracksmfs.cameraPosition", msg.position); } catch {}
+      }
       return;
     case "resetGazeCalibration":
       state.gazeCalibration = emptyGazeCalibration();
@@ -628,6 +647,15 @@ function computePose(matrix, landmarks) {
     y     = ny;
   }
 
+  // Compensate the natural pitch tilt the camera adds depending on
+  // its physical position relative to the screen. A phone sitting
+  // below the screen films the face from below, so the user's
+  // "looking straight ahead" looks like "looking down" to the camera.
+  // We pre-subtract that offset so pitch=0 still means "horizontal
+  // gaze" after calibration.
+  const pitchOffset = CAMERA_PITCH_COMP[state.cameraPosition] || 0;
+  pitch -= pitchOffset;
+
   const raw = { yaw, pitch, roll, x, y, z: tz };
   for (const k of RAW_KEYS) raw[k] *= REAR_CAMERA_FLIP[k];
   return raw;
@@ -662,10 +690,14 @@ function computeGazeFromLandmarks(landmarks) {
   const gr = eyeRatio(Riris, Rout, Rin, Rtop, Rbot);
   // The rear camera mirrors the image, so the inner corner of the
   // left eye in the user's reference is actually the right side of
-  // the picture. We sign-flip X to make "look right" = +X.
+  // the picture. We sign-flip X to make "look right" = +X. Y is also
+  // flipped depending on where the phone sits: a phone below the
+  // screen films the face from below, so the iris-in-eye Y measure
+  // is inverted relative to the user's intent.
+  const yFlip = CAMERA_GAZE_Y_FLIP[state.cameraPosition] || 1;
   return {
     x: -((gl.x + gr.x) * 0.5),
-    y:  ((gl.y + gr.y) * 0.5),
+    y:  ((gl.y + gr.y) * 0.5) * yFlip,
   };
 }
 
@@ -906,6 +938,7 @@ function maybeSendStatus(now) {
     gazeCalibration: state.gazeCalibration,
     lastGaze: state.lastGaze,
     lastGazeRaw: state.lastGazeRaw,
+    cameraPosition: state.cameraPosition,
   };
   if (state.mode === "countdown") {
     const total = state.countdownTotalMs || 10000;
