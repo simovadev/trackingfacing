@@ -200,6 +200,10 @@ function connectRelay() {
         broadcastTuner({ type: "calibrationDone" });
         return;
       }
+      if (msg.type === "phoneStatus") {
+        broadcastTuner({ type: "phoneStatus", phone: msg });
+        return;
+      }
       if (typeof msg.yaw === "number") sendPose(msg);
     } catch (_) {}
   });

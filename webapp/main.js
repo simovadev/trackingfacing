@@ -386,6 +386,35 @@ const filters = {
 };
 function resetFilters() { for (const k of RAW_KEYS) { const f = filters[k]; f.x = null; f.dx = 0; f.t = null; } }
 
+// Broadcast a status snapshot to the PC so it can mirror the overlay.
+let lastStatusAt = 0;
+function maybeSendStatus(now) {
+  if (now - lastStatusAt < 100) return;
+  lastStatusAt = now;
+  const payload = { type: "phoneStatus", mode: state.mode };
+  if (state.mode === "countdown") {
+    const total = state.countdownTotalMs || 10000;
+    const remaining = Math.max(0, state.countdownEndAt - now);
+    payload.countdown = {
+      seconds: Math.ceil(remaining / 1000),
+      ratio: total > 0 ? 1 - remaining / total : 1,
+    };
+  } else if (state.mode === "calibrating") {
+    const step = STEPS[state.calStepIdx];
+    const elapsed = now - state.calStepStart;
+    payload.calibration = {
+      stepIndex: state.calStepIdx,
+      stepCount: STEPS.length,
+      arrow: step.arrow,
+      title: step.title,
+      sub: step.sub,
+      seconds: Math.ceil(Math.max(0, step.duration - elapsed) / 1000),
+      ratio: Math.min(1, elapsed / step.duration),
+    };
+  }
+  send(payload);
+}
+
 // ----- Calibration wizard (driven by PC, displayed on phone) ------------
 
 const STEPS = [
@@ -403,7 +432,8 @@ const STEPS = [
 function startCountdown(seconds) {
   if (!state.cameraReady || !state.modelReady) return;
   state.mode = "countdown";
-  state.countdownEndAt = performance.now() + seconds * 1000;
+  state.countdownTotalMs = seconds * 1000;
+  state.countdownEndAt = performance.now() + state.countdownTotalMs;
   setStatePill();
 }
 
@@ -453,6 +483,7 @@ function onCalibrationFrameDone(idx) {
 function loop() {
   if (state.cameraReady && state.modelReady) {
     const now = performance.now();
+    maybeSendStatus(now);
     const result = state.landmarker.detectForVideo(els.video, now);
     const matrices = result.facialTransformationMatrixes;
     if (matrices && matrices.length > 0) {

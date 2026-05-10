@@ -28,7 +28,16 @@ const els = {
   rtcOverlay: document.getElementById("rtcOverlay"),
   rtcToggle: document.getElementById("rtcToggle"),
   rtcStatus: document.getElementById("rtcStatus"),
+  phoneOverlay: document.getElementById("phoneOverlay"),
+  poStep: document.getElementById("po-step"),
+  poArrow: document.getElementById("po-arrow"),
+  poTitle: document.getElementById("po-title"),
+  poSub: document.getElementById("po-sub"),
+  poNum: document.getElementById("po-num"),
+  poRing: document.getElementById("po-ring"),
 };
+
+const PO_CIRC = 2 * Math.PI * 46;
 
 const state = {
   ws: null,
@@ -230,6 +239,34 @@ async function handleRtcSignal(payload) {
   }
 }
 
+// ----- Phone overlay (mirrors what the phone is showing) ---------------
+
+function renderPhoneOverlay(p) {
+  if (!p || !p.mode || (p.mode !== "countdown" && p.mode !== "calibrating")) {
+    els.phoneOverlay.classList.add("hidden");
+    return;
+  }
+  els.phoneOverlay.classList.remove("hidden");
+  if (p.mode === "countdown" && p.countdown) {
+    els.poStep.textContent = "Démarrage";
+    els.poArrow.textContent = "";
+    els.poTitle.textContent = "Place le téléphone derrière toi";
+    els.poSub.textContent = "Le tracking commence dans…";
+    els.poNum.textContent = String(p.countdown.seconds);
+    els.poRing.style.strokeDashoffset = String(PO_CIRC * (1 - Math.min(1, Math.max(0, p.countdown.ratio))));
+    return;
+  }
+  if (p.mode === "calibrating" && p.calibration) {
+    const c = p.calibration;
+    els.poStep.textContent = `Étape ${c.stepIndex + 1} / ${c.stepCount}`;
+    els.poArrow.textContent = c.arrow || "";
+    els.poTitle.textContent = c.title || "";
+    els.poSub.textContent = c.sub || "";
+    els.poNum.textContent = String(c.seconds);
+    els.poRing.style.strokeDashoffset = String(PO_CIRC * (1 - Math.min(1, Math.max(0, c.ratio))));
+  }
+}
+
 // ----- WS to local connector --------------------------------------------
 
 function connectWS() {
@@ -247,6 +284,9 @@ function connectWS() {
         handleRtcSignal(msg.payload);
       } else if (msg.type === "calibrationDone") {
         setRtcStatus(state.pc ? "aperçu en cours" : "inactif");
+        renderPhoneOverlay({ mode: "active" });
+      } else if (msg.type === "phoneStatus") {
+        renderPhoneOverlay(msg.phone || {});
       }
     } catch {}
   };

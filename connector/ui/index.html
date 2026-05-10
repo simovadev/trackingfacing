@@ -47,6 +47,19 @@
       <div class="preview-stage">
         <video id="rtcVideo" autoplay playsinline muted></video>
         <div id="rtcOverlay" class="preview-empty">Aperçu désactivé</div>
+        <div id="phoneOverlay" class="phone-overlay hidden">
+          <div class="po-step" id="po-step"></div>
+          <div class="po-arrow" id="po-arrow"></div>
+          <div class="po-title" id="po-title"></div>
+          <div class="po-sub" id="po-sub"></div>
+          <div class="po-ring">
+            <svg viewBox="0 0 100 100">
+              <circle class="bg" cx="50" cy="50" r="46" />
+              <circle class="fg" id="po-ring" cx="50" cy="50" r="46" stroke-dasharray="289" stroke-dashoffset="0" />
+            </svg>
+            <div class="po-num" id="po-num"></div>
+          </div>
+        </div>
       </div>
     </section>
 

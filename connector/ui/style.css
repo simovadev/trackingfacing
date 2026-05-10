@@ -53,6 +53,19 @@ section h2 { margin: 0 0 8px; font-size: 14px; font-weight: 700; opacity: 0.85; 
 .preview-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 14px; pointer-events: none; }
 .preview-empty.hidden { display: none; }
 
+.phone-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 18px; text-align: center; background: rgba(11,13,16,0.78); backdrop-filter: blur(4px); pointer-events: none; }
+.phone-overlay.hidden { display: none; }
+.phone-overlay .po-step { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.phone-overlay .po-arrow { font-size: 56px; line-height: 1; opacity: 0.9; }
+.phone-overlay .po-title { font-size: 22px; font-weight: 800; }
+.phone-overlay .po-sub { font-size: 13px; color: var(--muted); }
+.phone-overlay .po-ring { width: 92px; height: 92px; position: relative; display: grid; place-items: center; }
+.phone-overlay .po-ring svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.phone-overlay .po-ring circle { fill: none; stroke-width: 8; }
+.phone-overlay .po-ring .bg { stroke: #ffffff1a; }
+.phone-overlay .po-ring .fg { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset 80ms linear; }
+.phone-overlay .po-num { font-size: 36px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
 .hints { color: var(--muted); }
 .hints code { background: #0b0d10; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--fg); }
 .hints ul { margin: 6px 0 0; padding-left: 20px; }
