@@ -91,7 +91,13 @@ const state = {
   stream: null,
   pc: null,
   gizmoEnabled: true,
+  bypass: false,
 };
+
+// Bypass mode: send angles in degrees / translations in cm without
+// calibration. Use a fixed conversion so the values are usable.
+const BYPASS_DEG_GAIN = 180 / Math.PI; // rad -> deg
+const BYPASS_TR_GAIN = 1.0;            // model cm pass-through
 
 const RTC_CONFIG = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -222,6 +228,16 @@ function handleCommand(msg) {
       return;
     case "setGizmo":
       state.gizmoEnabled = !!msg.enabled;
+      return;
+    case "resetCalibration":
+      state.calibration = emptyCalibration();
+      try { localStorage.removeItem(CAL_KEY); } catch {}
+      state.mode = "idle";
+      setOverlay(null);
+      setStatePill();
+      return;
+    case "setBypass":
+      state.bypass = !!msg.enabled;
       return;
   }
 }
@@ -525,12 +541,18 @@ function renderPhoneGizmo() {
   }
 }
 
-// Broadcast a status snapshot to the PC so it can mirror the overlay.
+// Broadcast a status snapshot to the PC so it can mirror the overlay
+// and surface diagnostic info (calibration ranges, bypass state...).
 let lastStatusAt = 0;
 function maybeSendStatus(now) {
   if (now - lastStatusAt < 100) return;
   lastStatusAt = now;
-  const payload = { type: "phoneStatus", mode: state.mode };
+  const payload = {
+    type: "phoneStatus",
+    mode: state.mode,
+    bypass: state.bypass,
+    calibration: state.calibration,
+  };
   if (state.mode === "countdown") {
     const total = state.countdownTotalMs || 10000;
     const remaining = Math.max(0, state.countdownEndAt - now);
@@ -673,7 +695,22 @@ function loop() {
           });
         }
       } else if (state.mode === "active") {
-        const out = applyCenterAndScale(raw);
+        let out;
+        if (state.bypass) {
+          // No calibration: send raw angles converted to degrees and
+          // raw translations as-is, so the user can see ground-truth
+          // values in OpenTrack and the tuner.
+          out = {
+            yaw:   raw.yaw   * BYPASS_DEG_GAIN,
+            pitch: raw.pitch * BYPASS_DEG_GAIN,
+            roll:  raw.roll  * BYPASS_DEG_GAIN,
+            x:     raw.x     * BYPASS_TR_GAIN,
+            y:     raw.y     * BYPASS_TR_GAIN,
+            z:     raw.z     * BYPASS_TR_GAIN,
+          };
+        } else {
+          out = applyCenterAndScale(raw);
+        }
         if (out) {
           const t = now;
           const filtered = {

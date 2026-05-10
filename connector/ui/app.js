@@ -36,6 +36,9 @@ const els = {
   poSub: document.getElementById("po-sub"),
   poNum: document.getElementById("po-num"),
   poRing: document.getElementById("po-ring"),
+  resetCal: document.getElementById("resetCal"),
+  bypass: document.getElementById("bypass"),
+  calDiag: document.getElementById("calDiag"),
 };
 
 const PO_CIRC = 2 * Math.PI * 46;
@@ -145,6 +148,8 @@ function refreshButtons() {
   els.calibrate.disabled = !ready;
   els.rtcToggle.disabled = !ready;
   els.gizmoToggle.disabled = !ready;
+  els.resetCal.disabled = !ready;
+  els.bypass.disabled = !ready;
 }
 
 function updateLive(live) {
@@ -269,6 +274,43 @@ function renderPhoneOverlay(p) {
   }
 }
 
+// ----- Calibration diagnostics -----------------------------------------
+
+const RAW_AXES = ["yaw", "pitch", "roll", "x", "y", "z"];
+const RAW_LABELS = { yaw: "Yaw", pitch: "Pitch", roll: "Roll", x: "X", y: "Y", z: "Z" };
+const RAW_UNITS  = { yaw: "rad", pitch: "rad", roll: "rad", x: "u", y: "u", z: "u" };
+// Heuristic: a healthy calibrated range should be well above this in raw units.
+const MIN_HEALTHY_SPAN = { yaw: 0.15, pitch: 0.10, roll: 0.10, x: 1.0, y: 1.0, z: 1.0 };
+
+function renderCalDiag(phone) {
+  const cal = phone?.calibration;
+  if (!cal || !cal.ranges) {
+    els.calDiag.innerHTML = '<div class="muted">aucune calibration en mémoire</div>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Axe</th><th>Centre</th><th>Min</th><th>Max</th><th>Amplitude</th><th>État</th></tr></thead><tbody>';
+  for (const k of RAW_AXES) {
+    const r = cal.ranges[k] || { min: 0, max: 0 };
+    const c = cal.center?.[k];
+    const span = (r.max || 0) - (r.min || 0);
+    const min = MIN_HEALTHY_SPAN[k] || 0;
+    let cls = "";
+    let label = "OK";
+    if (span <= 0) { cls = "bad"; label = "non calibré"; }
+    else if (span < min) { cls = "warn"; label = "amplitude faible"; }
+    html += `<tr>
+      <td class="axis">${RAW_LABELS[k]}</td>
+      <td>${c == null ? "—" : c.toFixed(3)}</td>
+      <td>${(r.min || 0).toFixed(3)}</td>
+      <td>${(r.max || 0).toFixed(3)}</td>
+      <td>${span.toFixed(3)} ${RAW_UNITS[k]}</td>
+      <td class="${cls}">${label}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  els.calDiag.innerHTML = html;
+}
+
 // ----- WS to local connector --------------------------------------------
 
 function connectWS() {
@@ -289,6 +331,10 @@ function connectWS() {
         renderPhoneOverlay({ mode: "active" });
       } else if (msg.type === "phoneStatus") {
         renderPhoneOverlay(msg.phone || {});
+        renderCalDiag(msg.phone || {});
+        if (msg.phone && typeof msg.phone.bypass === "boolean") {
+          els.bypass.checked = msg.phone.bypass;
+        }
       }
     } catch {}
   };
@@ -337,6 +383,15 @@ els.gizmoToggle.addEventListener("click", () => {
   gizmoOn = !gizmoOn;
   els.gizmoToggle.textContent = gizmoOn ? "Masquer le gizmo" : "Afficher le gizmo";
   sendCommand({ type: "setGizmo", enabled: gizmoOn });
+});
+
+els.resetCal.addEventListener("click", () => {
+  if (!confirm("Effacer la calibration enregistrée sur le téléphone ?")) return;
+  sendCommand({ type: "resetCalibration" });
+});
+
+els.bypass.addEventListener("change", () => {
+  sendCommand({ type: "setBypass", enabled: els.bypass.checked });
 });
 
 (async () => {

@@ -32,6 +32,11 @@
       <button id="pauseResume">Pause</button>
       <button id="recenter">Recentrer</button>
       <button id="calibrate">Calibrer</button>
+      <button id="resetCal">Effacer calibration</button>
+      <label class="bypass">
+        <input id="bypass" type="checkbox" />
+        <span>Mode direct (sans calibration)</span>
+      </label>
     </div>
   </section>
 
@@ -77,6 +82,11 @@
         <div>Sortie</div>
       </div>
       <div id="rows"></div>
+    </section>
+
+    <section class="diag">
+      <h2>Calibration actuelle (sur le téléphone)</h2>
+      <div id="calDiag" class="cal-diag muted">en attente du téléphone…</div>
     </section>
 
     <section class="hints">

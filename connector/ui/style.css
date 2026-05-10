@@ -22,6 +22,16 @@ button.primary:hover { filter: brightness(1.1); }
 .ctl-group { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 14px 18px; background: #11151a; border: 1px solid var(--line); border-radius: 14px; }
 .ctl-group .delay { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; }
 .ctl-group .delay input { width: 60px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line2); background: #0b0d10; color: var(--fg); font: inherit; font-variant-numeric: tabular-nums; }
+.ctl-group .bypass { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; padding-left: 8px; border-left: 1px solid var(--line); margin-left: 4px; }
+
+.cal-diag { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.6; }
+.cal-diag table { width: 100%; border-collapse: collapse; }
+.cal-diag th, .cal-diag td { padding: 6px 10px; text-align: right; border-bottom: 1px dashed var(--line); }
+.cal-diag th:first-child, .cal-diag td:first-child { text-align: left; }
+.cal-diag th { color: var(--muted); font-weight: 500; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+.cal-diag .axis { font-weight: 700; color: var(--fg); }
+.cal-diag .warn { color: #fbbf24; }
+.cal-diag .bad { color: #f87171; }
 
 main { max-width: 1200px; margin: 0 auto; padding: 22px; display: grid; gap: 22px; }
 
