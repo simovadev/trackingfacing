@@ -766,8 +766,20 @@ function loop() {
     if (matrices && matrices.length > 0) {
       const raw = computePose(matrices[0].data, lastLandmarks);
       state.lastRaw = raw;
-      // First-run bootstrap (in case calibration is empty)
-      if (!state.calibration.center) state.calibration.center = { ...raw };
+      // First-run bootstrap (or partial restore): make sure every axis
+      // has a center value and a sane range. If the calibration object
+      // exists but some keys are missing (e.g. after a partial manual
+      // edit from the tuner), fill in the gaps.
+      if (!state.calibration.center) state.calibration.center = {};
+      if (!state.calibration.ranges) state.calibration.ranges = {};
+      for (const k of RAW_KEYS) {
+        if (state.calibration.center[k] == null) {
+          state.calibration.center[k] = raw[k];
+        }
+        if (!state.calibration.ranges[k]) {
+          state.calibration.ranges[k] = { ...FALLBACK[k] };
+        }
+      }
 
       // Debug recording: send a snapshot every frame to the connector
       // so it can dump a JSON file. Includes the raw 4x4 matrix, the

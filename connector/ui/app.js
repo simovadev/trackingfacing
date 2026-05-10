@@ -316,12 +316,27 @@ function ensureCalTable() {
   els.calDiag.innerHTML = html;
   // Wire input -> command
   els.calDiag.querySelectorAll('input.cal-edit').forEach((inp) => {
+    // Disable mouse-wheel changes on these inputs: too easy to bump a
+    // value by 10x or 100x by accident while scrolling the page.
+    inp.addEventListener('wheel', (e) => { if (document.activeElement === inp) e.preventDefault(); }, { passive: false });
     inp.addEventListener('change', () => {
       const tr = inp.closest('tr');
       const k = tr.dataset.axis;
       const field = inp.dataset.field;
       const v = parseFloat(inp.value);
       if (Number.isNaN(v)) return;
+      // Sanity check: if the value is more than 50x what's typical for
+      // this axis, ask the user to confirm. Avoids accidental scroll-
+      // wheel ten-folding (e.g. typing -210 instead of -21).
+      const typical = (RAW_UNITS[k] === 'rad') ? 2 : 50;
+      if (Math.abs(v) > typical) {
+        const ok = confirm(`Valeur inhabituelle (${v}) pour ${RAW_LABELS[k]} ${field}. Confirmer ?`);
+        if (!ok) {
+          // Revert visually; the next phoneStatus tick will restore the real value.
+          inp.blur();
+          return;
+        }
+      }
       const partial = { ranges: {} };
       if (field === 'center') {
         partial.center = {};
