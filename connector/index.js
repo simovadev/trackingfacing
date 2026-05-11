@@ -485,6 +485,42 @@ const tuner = http.createServer((req, res) => {
     });
     return;
   }
+  // POST /api/pose : injection locale d'une pose (caméra PC, pas
+  // de relay/iPhone). Le corps est un JSON avec yaw/pitch/roll/x/y/z
+  // (+ gazeX/gazeY optionnels), passé tel quel à sendPose() pour
+  // bénéficier des transformations gain/expo/offset/deadzone et du
+  // forward UDP vers OpenTrack.
+  if (req.url === "/api/pose" && req.method === "POST") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      try {
+        const pose = JSON.parse(body);
+        if (pose && typeof pose === "object" && Number.isFinite(pose.yaw)) {
+          sendPose({
+            yaw:   Number(pose.yaw)   || 0,
+            pitch: Number(pose.pitch) || 0,
+            roll:  Number(pose.roll)  || 0,
+            x:     Number(pose.x)     || 0,
+            y:     Number(pose.y)     || 0,
+            z:     Number(pose.z)     || 0,
+            gazeX: Number(pose.gazeX) || 0,
+            gazeY: Number(pose.gazeY) || 0,
+          });
+          // Mark the connector as "phone connected" for the tuner's
+          // status indicator, since a local source is feeding poses.
+          state.phoneConnected = true;
+          state.lastLocalPoseAt = Date.now();
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (_) {
+        res.writeHead(400);
+        res.end("bad json");
+      }
+    });
+    return;
+  }
   // Static files
   const reqPath = req.url === "/" ? "/index.html" : req.url.split("?")[0];
   const filePath = path.join(uiDir, reqPath);

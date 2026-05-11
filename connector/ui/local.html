@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>tracksmfs · webcam locale</title>
+  <link rel="stylesheet" href="./style.css" />
+  <style>
+    body { margin: 0; height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
+    header { padding: 14px 22px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 16px; }
+    header h1 { margin: 0; font-size: 18px; font-weight: 800; }
+    header .pills { display: flex; gap: 8px; flex-wrap: wrap; }
+    header .actions { margin-left: auto; display: flex; gap: 10px; }
+    main { display: grid; grid-template-columns: minmax(420px, 1fr) minmax(300px, 380px); gap: 18px; padding: 18px; min-height: 0; }
+    .stage { position: relative; background: #000; border-radius: 14px; overflow: hidden; min-height: 0; }
+    .stage video, .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+    .stage video { transform: scaleX(-1); } /* mirror like a regular webcam preview */
+    .stage canvas { transform: scaleX(-1); pointer-events: none; }
+    .panel { display: grid; gap: 12px; align-content: start; }
+    .panel section { background: #11151a; border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+    .panel h2 { margin: 0 0 8px; font-size: 13px; font-weight: 700; opacity: 0.85; }
+    .panel .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .panel .ax { display: grid; grid-template-columns: 50px 1fr 80px; gap: 8px; font-variant-numeric: tabular-nums; font-size: 12px; align-items: center; }
+    .panel .ax .lbl { color: var(--muted); }
+    .panel .ax .bar { height: 6px; background: #ffffff10; border-radius: 3px; position: relative; overflow: hidden; }
+    .panel .ax .bar::before { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: #ffffff44; }
+    .panel .ax .fill { position: absolute; top: 0; bottom: 0; background: var(--accent); }
+    .panel .ax .val { text-align: right; }
+    .panel button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    footer { padding: 10px 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>tracksmfs · caméra locale</h1>
+    <div class="pills">
+      <span class="pill" id="cam">caméra : inactive</span>
+      <span class="pill" id="model">modèle : inactif</span>
+      <span class="pill" id="pipe">connector : ?</span>
+      <span class="pill" id="fps">fps : —</span>
+    </div>
+    <div class="actions">
+      <a href="/" class="ghost"><button class="ghost">← Retour réglages</button></a>
+    </div>
+  </header>
+
+  <main>
+    <div class="stage">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+    </div>
+    <div class="panel">
+      <section>
+        <h2>Contrôle</h2>
+        <div class="row">
+          <button id="start" class="primary">Démarrer</button>
+          <button id="recenter">Recentrer</button>
+        </div>
+        <div class="row" style="margin-top: 10px">
+          <label class="muted"><input id="sendEnabled" type="checkbox" checked /> Envoyer au connector</label>
+          <label class="muted"><input id="overlayEnabled" type="checkbox" checked /> Afficher le maillage</label>
+        </div>
+      </section>
+      <section>
+        <h2>Pose temps réel</h2>
+        <div class="ax"><div class="lbl">Yaw</div><div class="bar" id="bar-yaw"><div class="fill"></div></div><div class="val" id="val-yaw">0.00 °</div></div>
+        <div class="ax"><div class="lbl">Pitch</div><div class="bar" id="bar-pitch"><div class="fill"></div></div><div class="val" id="val-pitch">0.00 °</div></div>
+        <div class="ax"><div class="lbl">Roll</div><div class="bar" id="bar-roll"><div class="fill"></div></div><div class="val" id="val-roll">0.00 °</div></div>
+        <div class="ax"><div class="lbl">X</div><div class="bar" id="bar-x"><div class="fill"></div></div><div class="val" id="val-x">0.0 cm</div></div>
+        <div class="ax"><div class="lbl">Y</div><div class="bar" id="bar-y"><div class="fill"></div></div><div class="val" id="val-y">0.0 cm</div></div>
+        <div class="ax"><div class="lbl">Z</div><div class="bar" id="bar-z"><div class="fill"></div></div><div class="val" id="val-z">0.0 cm</div></div>
+      </section>
+      <section>
+        <h2>Conseil</h2>
+        <p class="muted" style="font-size: 12px; margin: 0;">Place ta tête centrée face à la webcam. Clique <b>Démarrer</b>, attends que le maillage s'affiche, puis clique <b>Recentrer</b>. Les réglages gain / expo / inversion se font dans la page principale <a href="/">/réglages</a>.</p>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    Source : webcam PC · MediaPipe FaceLandmarker en local · Pose envoyée à <code>http://localhost:7777/api/pose</code>
+  </footer>
+
+  <script type="module" src="./local.js"></script>
+</body>
+</html>
